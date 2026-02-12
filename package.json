@@ -1,0 +1,287 @@
+{
+  "name": "code-walkthrough",
+  "displayName": "Code Walkthrough",
+  "description": "Interactive step-by-step code walkthroughs with auto-navigation, line highlighting, and subtitle explanations",
+  "version": "0.1.0",
+  "publisher": "code-walkthrough",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#18181b",
+    "theme": "dark"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/code-walkthrough.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/code-walkthrough/issues"
+  },
+  "homepage": "https://github.com/yourusername/code-walkthrough#readme",
+  "keywords": [
+    "walkthrough",
+    "tutorial",
+    "guide",
+    "documentation",
+    "code tour",
+    "interactive",
+    "learning",
+    "onboarding",
+    "ai",
+    "code explanation"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Education",
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:.walkthrough"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeWalkthrough",
+          "title": "Walkthroughs",
+          "icon": "$(book)"
+        }
+      ]
+    },
+    "views": {
+      "codeWalkthrough": [
+        {
+          "id": "codeWalkthrough.explorer",
+          "name": "Walkthroughs"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "codeWalkthrough.explorer",
+        "contents": "No walkthroughs found.\n[Record a Walkthrough](command:codeWalkthrough.recordStart)\n[Generate with AI](command:codeWalkthrough.generate)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "codeWalkthrough.generateFromFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "codeWalkthrough.refreshTree",
+          "when": "view == codeWalkthrough.explorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeWalkthrough.export",
+          "when": "view == codeWalkthrough.explorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeWalkthrough.generate",
+          "when": "view == codeWalkthrough.explorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeWalkthrough.recordStart",
+          "when": "view == codeWalkthrough.explorer",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "codeWalkthrough.exportFile",
+          "when": "view == codeWalkthrough.explorer && viewItem == walkthrough",
+          "group": "inline"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codeWalkthrough.open",
+        "title": "Open Walkthrough",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.nextStep",
+        "title": "Next Step",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.prevStep",
+        "title": "Previous Step",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.togglePlayback",
+        "title": "Play / Pause",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.stop",
+        "title": "Stop Walkthrough",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.recordStart",
+        "title": "Start Recording",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.recordStep",
+        "title": "Capture Step",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.recordUndo",
+        "title": "Undo Last Step",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.recordStop",
+        "title": "Stop Recording & Save",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.recordCancel",
+        "title": "Cancel Recording",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.cycleSpeed",
+        "title": "Cycle Playback Speed",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.repair",
+        "title": "Repair Walkthrough (Git Rebase)",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.generate",
+        "title": "Generate Walkthrough with AI",
+        "category": "Walkthrough",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "codeWalkthrough.generateFromFolder",
+        "title": "Generate Walkthrough for Folder",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.refreshTree",
+        "title": "Refresh",
+        "category": "Walkthrough",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeWalkthrough.playFile",
+        "title": "Play Walkthrough",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.playFileAtStep",
+        "title": "Play From Step",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.setupAI",
+        "title": "Setup AI Provider",
+        "category": "Walkthrough"
+      },
+      {
+        "command": "codeWalkthrough.export",
+        "title": "Export Walkthrough",
+        "category": "Walkthrough",
+        "icon": "$(export)"
+      },
+      {
+        "command": "codeWalkthrough.exportFile",
+        "title": "Export Walkthrough",
+        "category": "Walkthrough"
+      }
+    ],
+    "configuration": {
+      "title": "Code Walkthrough",
+      "properties": {
+        "codeWalkthrough.ai.apiEndpoint": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "OpenAI-compatible API endpoint (e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, http://localhost:11434/v1 for Ollama)"
+        },
+        "codeWalkthrough.ai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the configured endpoint. Leave blank for Ollama/local models."
+        },
+        "codeWalkthrough.ai.model": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "Model name (e.g. gpt-4o, claude-sonnet-4-20250514, llama3, deepseek-coder)"
+        },
+        "codeWalkthrough.ai.strategy": {
+          "type": "string",
+          "default": "quick",
+          "enum": ["quick", "deep"],
+          "enumDescriptions": [
+            "Quick Scan: Collects code context and sends it in one prompt (works with all providers)",
+            "Deep Exploration: LLM explores the codebase interactively using tools (requires OpenAI-compatible API with function calling)"
+          ],
+          "description": "Default AI generation strategy"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "codeWalkthrough.nextStep",
+        "key": "right",
+        "when": "codeWalkthrough.active"
+      },
+      {
+        "command": "codeWalkthrough.prevStep",
+        "key": "left",
+        "when": "codeWalkthrough.active"
+      },
+      {
+        "command": "codeWalkthrough.togglePlayback",
+        "key": "space",
+        "when": "codeWalkthrough.active"
+      },
+      {
+        "command": "codeWalkthrough.stop",
+        "key": "escape",
+        "when": "codeWalkthrough.active"
+      },
+      {
+        "command": "codeWalkthrough.recordStep",
+        "key": "ctrl+shift+.",
+        "when": "codeWalkthrough.recording"
+      },
+      {
+        "command": "codeWalkthrough.cycleSpeed",
+        "key": "shift+space",
+        "when": "codeWalkthrough.active"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}

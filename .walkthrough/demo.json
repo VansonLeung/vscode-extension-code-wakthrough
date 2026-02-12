@@ -1,0 +1,55 @@
+{
+  "title": "Extension Architecture",
+  "description": "A walkthrough of how this VSCode extension is structured",
+  "steps": [
+    {
+      "file": "src/extension.ts",
+      "lines": [1, 5],
+      "symbol": "activate",
+      "subtitle": "Entry point. The extension imports its three core modules: walkthrough loader (discovers JSON files), playback engine (state machine), and the UI panel (webview).",
+      "duration": 10
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [11, 30],
+      "symbol": "activate",
+      "subtitle": "The activate function wires everything together. The engine emits status changes, which update the webview panel and trigger code navigation.",
+      "duration": 10
+    },
+    {
+      "file": "src/walkthrough/types.ts",
+      "lines": [1, 12],
+      "symbol": "WalkthroughStep",
+      "subtitle": "Each step points to a file + line range, with an optional symbol anchor for resilience against line drift. The subtitle is what you're reading right now.",
+      "duration": 8
+    },
+    {
+      "file": "src/walkthrough/loader.ts",
+      "lines": [30, 49],
+      "symbol": "discoverWalkthroughs",
+      "subtitle": "The loader uses VS Code's workspace.findFiles to discover all .walkthrough/*.json files, validates their structure, and returns typed objects.",
+      "duration": 8
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [7, 15],
+      "symbol": "PlaybackStatus",
+      "subtitle": "The playback engine is a state machine with three states: idle, playing, paused. It tracks the current step index and emits changes via an EventEmitter.",
+      "duration": 8
+    },
+    {
+      "file": "src/player/highlight.ts",
+      "lines": [5, 12],
+      "symbol": "HIGHLIGHT_DECORATION",
+      "subtitle": "Line highlighting uses VS Code's TextEditorDecorationType. The yellow background + border combo makes the active lines clearly visible without being intrusive.",
+      "duration": 8
+    },
+    {
+      "file": "src/ui/panel.ts",
+      "lines": [20, 40],
+      "symbol": "show",
+      "subtitle": "The webview panel opens beside the editor. It sends commands back to the extension via postMessage — play, pause, next, prev, and direct step navigation.",
+      "duration": 10
+    }
+  ]
+}
