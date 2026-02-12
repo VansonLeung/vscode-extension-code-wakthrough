@@ -1,5 +1,8 @@
 # Code Walkthrough
 
+<img width="100%" alt="image" src="https://github.com/user-attachments/assets/21a8ed36-1aeb-4ed9-8e73-636424433322" />
+
+
 Interactive, step-by-step guided tours of your codebase. Like a video player for code.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
