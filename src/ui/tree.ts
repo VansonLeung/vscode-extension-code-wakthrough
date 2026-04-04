@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { discoverWalkthroughs } from "../walkthrough/loader";
-import { WalkthroughFile, WalkthroughStep } from "../walkthrough/types";
+import { WalkthroughFile, WalkthroughRelation, WalkthroughStep } from "../walkthrough/types";
 
-type TreeItem = WalkthroughTreeItem | StepTreeItem;
+type TreeItem = WalkthroughTreeItem | RelatedTreeItem | StepTreeItem;
 
 class WalkthroughTreeItem extends vscode.TreeItem {
   constructor(public readonly file: WalkthroughFile) {
@@ -16,6 +16,24 @@ class WalkthroughTreeItem extends vscode.TreeItem {
       command: "codeWalkthrough.playFile",
       title: "Play Walkthrough",
       arguments: [file],
+    };
+  }
+}
+
+class RelatedTreeItem extends vscode.TreeItem {
+  constructor(
+    public readonly relation: WalkthroughRelation,
+    public readonly parentFile: WalkthroughFile
+  ) {
+    super(`Related: ${relation.title ?? path.basename(relation.path, ".json")}`, vscode.TreeItemCollapsibleState.None);
+    this.description = relation.type ?? "related";
+    this.tooltip = `${relation.path}${relation.note ? `\n${relation.note}` : ""}`;
+    this.iconPath = new vscode.ThemeIcon("link-external");
+    this.contextValue = "walkthroughRelation";
+    this.command = {
+      command: "codeWalkthrough.openLinkedWalkthrough",
+      title: "Open Related Walkthrough",
+      arguments: [relation.path],
     };
   }
 }
@@ -68,9 +86,13 @@ export class WalkthroughTreeProvider implements vscode.TreeDataProvider<TreeItem
     }
 
     if (element instanceof WalkthroughTreeItem) {
-      return element.file.walkthrough.steps.map(
+      const relatedItems = (element.file.walkthrough.related ?? []).map(
+        (relation) => new RelatedTreeItem(relation, element.file)
+      );
+      const stepItems = element.file.walkthrough.steps.map(
         (step, i) => new StepTreeItem(step, i, element.file)
       );
+      return [...relatedItems, ...stepItems];
     }
 
     return [];

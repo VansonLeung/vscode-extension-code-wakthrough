@@ -2,6 +2,19 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { Walkthrough, WalkthroughStep } from "../walkthrough/types";
 
+function relationLabel(type?: string): string {
+  switch (type) {
+    case "prerequisite":
+      return "Prerequisite";
+    case "follow-up":
+      return "Follow-up";
+    case "alternative":
+      return "Alternative";
+    default:
+      return "Related";
+  }
+}
+
 function inferLanguage(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const map: Record<string, string> = {
@@ -74,6 +87,16 @@ export async function exportToMarkdown(
   sections.push("");
   if (walkthrough.commitSha) {
     sections.push(`> Commit: \`${walkthrough.commitSha.slice(0, 7)}\``);
+    sections.push("");
+  }
+  if (walkthrough.related && walkthrough.related.length > 0) {
+    sections.push("## Related Walkthroughs");
+    sections.push("");
+    for (const relation of walkthrough.related) {
+      const title = relation.title ?? relation.path;
+      const note = relation.note ? ` - ${relation.note}` : "";
+      sections.push(`- **${relationLabel(relation.type)}:** ${title} (\`${relation.path}\`)${note}`);
+    }
     sections.push("");
   }
   sections.push("---");

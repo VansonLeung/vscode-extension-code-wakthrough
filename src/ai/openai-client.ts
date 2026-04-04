@@ -1,81 +1,42 @@
 import * as vscode from "vscode";
 import * as https from "https";
 import * as http from "http";
+import { Buffer } from "buffer";
 import { URL } from "url";
-
-export interface ToolCall {
-  id: string;
-  type: "function";
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content?: string | null;
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
-}
+import {
+  AIConfig,
+  buildApiUrl,
+  ChatMessage,
+  parseErrorMessage,
+  ToolCompletionOptions,
+} from "./client-shared";
 
 interface ChatCompletionChoice {
   message?: {
     role?: string;
     content?: string | null;
-    tool_calls?: ToolCall[];
+    tool_calls?: ChatMessage["tool_calls"];
   };
-  finish_reason?: string;
-  delta?: { content?: string };
 }
 
 interface ChatCompletionResponse {
   choices: ChatCompletionChoice[];
 }
 
-export interface AIConfig {
-  endpoint: string;
-  apiKey: string;
-  model: string;
-}
-
-export function getAIConfig(): AIConfig {
-  const config = vscode.workspace.getConfiguration("codeWalkthrough.ai");
-  return {
-    endpoint: config.get<string>("apiEndpoint") ?? "https://api.openai.com/v1",
-    apiKey: config.get<string>("apiKey") ?? "",
-    model: config.get<string>("model") ?? "gpt-4o",
-  };
-}
-
-export function isAIConfigured(): boolean {
-  const config = getAIConfig();
-  const isLocalhost =
-    config.endpoint.includes("localhost") ||
-    config.endpoint.includes("127.0.0.1");
-  return isLocalhost || config.apiKey.length > 0;
-}
-
-export async function chatCompletion(
+export async function openAIChatCompletion(
   prompt: string,
+  config: AIConfig,
   onProgress?: (text: string) => void,
   cancellationToken?: vscode.CancellationToken,
   logger?: vscode.OutputChannel
 ): Promise<string> {
-  const config = getAIConfig();
-  const url = new URL(`${config.endpoint}/chat/completions`);
+  const url = buildApiUrl(config.endpoint, "/chat/completions");
 
   const requestBody = {
     model: config.model,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.3,
     max_tokens: 8192,
-  };
-
-  const body = JSON.stringify(requestBody);
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
   };
 
   if (logger) {
@@ -89,12 +50,57 @@ export async function chatCompletion(
     logger.appendLine(`${"=".repeat(60)}`);
   }
 
+  const response = await sendOpenAIRequest(url, requestBody, config, cancellationToken, onProgress);
+  return response.choices?.[0]?.message?.content ?? "";
+}
+
+export async function openAIChatCompletionWithTools(
+  options: ToolCompletionOptions,
+  config: AIConfig
+): Promise<ChatMessage> {
+  const url = buildApiUrl(config.endpoint, "/chat/completions");
+
+  const requestBody = {
+    model: config.model,
+    messages: options.messages,
+    tools: options.tools,
+    tool_choice: "auto" as const,
+    temperature: 0.3,
+    max_tokens: 8192,
+  };
+
+  const response = await sendOpenAIRequest(url, requestBody, config, options.cancellationToken);
+  const msg = response.choices?.[0]?.message;
+  if (!msg) {
+    throw new Error("No message in API response");
+  }
+
+  return {
+    role: "assistant",
+    content: msg.content ?? null,
+    ...(msg.tool_calls && msg.tool_calls.length > 0 ? { tool_calls: msg.tool_calls } : {}),
+  };
+}
+
+function sendOpenAIRequest(
+  url: URL,
+  requestBody: unknown,
+  config: AIConfig,
+  cancellationToken?: vscode.CancellationToken,
+  onProgress?: (text: string) => void
+): Promise<ChatCompletionResponse> {
+  const body = JSON.stringify(requestBody);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
   if (config.apiKey) {
     headers["Authorization"] = `Bearer ${config.apiKey}`;
   }
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<ChatCompletionResponse>((resolve, reject) => {
     const transport = url.protocol === "https:" ? https : http;
+    let settled = false;
 
     const req = transport.request(
       url,
@@ -108,156 +114,60 @@ export async function chatCompletion(
         res.on("data", (chunk: Buffer) => {
           chunks.push(chunk);
           if (onProgress) {
-            const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+            const totalLen = chunks.reduce((sum, current) => sum + current.length, 0);
             onProgress(`${totalLen} bytes received...`);
           }
         });
 
         res.on("end", () => {
-          const rawBody = Buffer.concat(chunks).toString("utf-8");
+          if (settled) {
+            return;
+          }
+          settled = true;
 
+          const rawBody = Buffer.concat(chunks).toString("utf-8");
           if (res.statusCode && res.statusCode >= 400) {
-            let errorMsg = `API error ${res.statusCode}`;
-            try {
-              const errJson = JSON.parse(rawBody) as {
-                error?: { message?: string };
-              };
-              if (errJson.error?.message) {
-                errorMsg = errJson.error.message;
-              }
-            } catch {
-            }
-            reject(new Error(errorMsg));
+            reject(new Error(parseErrorMessage(rawBody, `API error ${res.statusCode}`)));
             return;
           }
 
           try {
-            const json = JSON.parse(rawBody) as ChatCompletionResponse;
-            const content = json.choices?.[0]?.message?.content ?? "";
-            resolve(content);
+            resolve(JSON.parse(rawBody) as ChatCompletionResponse);
           } catch {
             reject(new Error("Failed to parse API response"));
           }
         });
 
-        res.on("error", reject);
+        res.on("error", (error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(error);
+        });
       }
     );
 
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    });
 
     if (cancellationToken) {
       cancellationToken.onCancellationRequested(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         req.destroy();
         reject(new Error("Request cancelled"));
       });
     }
 
     req.write(body);
-    req.end();
-  });
-}
-
-export interface ToolCompletionOptions {
-  messages: ChatMessage[];
-  tools: unknown[];
-  logger?: vscode.OutputChannel;
-  cancellationToken?: vscode.CancellationToken;
-}
-
-export async function chatCompletionWithTools(
-  options: ToolCompletionOptions
-): Promise<ChatMessage> {
-  const config = getAIConfig();
-  const url = new URL(`${config.endpoint}/chat/completions`);
-
-  const requestBody = {
-    model: config.model,
-    messages: options.messages,
-    tools: options.tools,
-    tool_choice: "auto" as const,
-    temperature: 0.3,
-    max_tokens: 8192,
-  };
-
-  const bodyStr = JSON.stringify(requestBody);
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  if (config.apiKey) {
-    headers["Authorization"] = `Bearer ${config.apiKey}`;
-  }
-
-  return new Promise<ChatMessage>((resolve, reject) => {
-    const transport = url.protocol === "https:" ? https : http;
-
-    const req = transport.request(
-      url,
-      { method: "POST", headers },
-      (res) => {
-        const chunks: Buffer[] = [];
-
-        res.on("data", (chunk: Buffer) => {
-          chunks.push(chunk);
-        });
-
-        res.on("end", () => {
-          const rawBody = Buffer.concat(chunks).toString("utf-8");
-
-          if (res.statusCode && res.statusCode >= 400) {
-            let errorMsg = `API error ${res.statusCode}`;
-            try {
-              const errJson = JSON.parse(rawBody) as {
-                error?: { message?: string };
-              };
-              if (errJson.error?.message) {
-                errorMsg = errJson.error.message;
-              }
-            } catch {
-            }
-            reject(new Error(errorMsg));
-            return;
-          }
-
-          try {
-            const json = JSON.parse(rawBody) as ChatCompletionResponse;
-            const msg = json.choices?.[0]?.message;
-            if (!msg) {
-              reject(new Error("No message in API response"));
-              return;
-            }
-
-            const result: ChatMessage = {
-              role: "assistant",
-              content: msg.content ?? null,
-            };
-
-            if (msg.tool_calls && msg.tool_calls.length > 0) {
-              result.tool_calls = msg.tool_calls;
-            }
-
-            resolve(result);
-          } catch {
-            reject(new Error("Failed to parse API response"));
-          }
-        });
-
-        res.on("error", reject);
-      }
-    );
-
-    req.on("error", reject);
-
-    if (options.cancellationToken) {
-      options.cancellationToken.onCancellationRequested(() => {
-        req.destroy();
-        reject(new Error("Request cancelled"));
-      });
-    }
-
-    req.write(bodyStr);
     req.end();
   });
 }

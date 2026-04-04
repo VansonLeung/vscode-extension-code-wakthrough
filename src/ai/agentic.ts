@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
-import { ChatMessage, chatCompletionWithTools, getAIConfig } from "./openai-client";
+import { ChatMessage, chatCompletionWithTools, getAIConfig } from "./llm-client";
 import { TOOL_DEFINITIONS } from "./tools/definitions";
 import { executeTool } from "./tools/executor";
 
 const MAX_ITERATIONS = 15;
+const MAX_EMPTY_RESPONSES = 2;
 
 const SYSTEM_PROMPT = `You are a senior developer creating an interactive code walkthrough.
 
@@ -22,6 +23,14 @@ When you have enough understanding, output ONLY valid JSON (no markdown fences, 
 {
   "title": "Short descriptive title",
   "description": "One sentence describing what this walkthrough covers",
+  "related": [
+    {
+      "path": ".walkthrough/other-walkthrough.json",
+      "title": "Optional title",
+      "type": "related",
+      "note": "Optional reason this is worth opening next"
+    }
+  ],
   "steps": [
     {
       "file": "relative/path/to/file.ts",
@@ -39,14 +48,24 @@ REQUIREMENTS:
 - Each step highlights 3-20 lines (focused sections, not entire files)
 - Line numbers must be accurate (use the line numbers shown by read_file)
 - Subtitles explain WHAT and WHY, not just restate the code
+- Include "related" only when there is a meaningful connection to another walkthrough provided in the catalog
 - Order steps to tell a coherent story
 - Do NOT output the JSON until you have explored enough to be accurate`;
+
+export interface AgenticWalkthroughRequest {
+  objective: string;
+  userGuidance?: string;
+  walkthroughCatalog?: string;
+  targetWalkthroughJson?: string;
+  referenceWalkthroughsJson?: string;
+}
 
 export async function runAgenticGeneration(
   folderUri: vscode.Uri,
   logger: vscode.OutputChannel,
   progress: vscode.Progress<{ message?: string }>,
-  cancellationToken: vscode.CancellationToken
+  cancellationToken: vscode.CancellationToken,
+  request?: AgenticWalkthroughRequest
 ): Promise<string | null> {
   const config = getAIConfig();
   const rootFolder = vscode.workspace.asRelativePath(folderUri, false);
@@ -54,6 +73,7 @@ export async function runAgenticGeneration(
   logger.appendLine(`\n${"=".repeat(60)}`);
   logger.appendLine(`[Agentic] Starting deep exploration`);
   logger.appendLine(`[Agentic] Folder: ${rootFolder}`);
+  logger.appendLine(`[Agentic] Client: ${config.client}`);
   logger.appendLine(`[Agentic] Endpoint: ${config.endpoint}`);
   logger.appendLine(`[Agentic] Model: ${config.model}`);
   logger.appendLine(`[Agentic] Max iterations: ${MAX_ITERATIONS}`);
@@ -64,11 +84,10 @@ export async function runAgenticGeneration(
     { role: "system", content: SYSTEM_PROMPT },
     {
       role: "user",
-      content:
-        `Create a walkthrough for the codebase in folder "${rootFolder}". ` +
-        `Start by listing files to understand the structure, then explore the code.`,
+      content: buildInitialRequest(rootFolder, request),
     },
   ];
+  let emptyResponses = 0;
 
   for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     if (cancellationToken.isCancellationRequested) {
@@ -128,12 +147,21 @@ export async function runAgenticGeneration(
     }
 
     if (response.content) {
+      emptyResponses = 0;
       logger.appendLine(`[Agentic] LLM produced final response (${response.content.length} chars)`);
       logger.appendLine(`[Agentic] Completed in ${iteration} iteration(s)`);
       return response.content;
     }
 
+    emptyResponses += 1;
     logger.appendLine(`[Agentic] Empty response with no tool calls — retrying`);
+    if (emptyResponses >= MAX_EMPTY_RESPONSES) {
+      throw new Error(
+        `The configured ${config.client} client returned ${emptyResponses} empty responses in a row. ` +
+        `This endpoint likely does not support the expected deep-exploration tool protocol for this model. ` +
+        `Try Quick Scan, switch client protocol, or use a model/endpoint with tool support.`
+      );
+    }
     messages.push({
       role: "user",
       content: "Please continue exploring or output the final walkthrough JSON.",
@@ -169,4 +197,35 @@ export async function runAgenticGeneration(
 
   logger.appendLine(`[Agentic] No final response produced`);
   return null;
+}
+
+function buildInitialRequest(
+  rootFolder: string,
+  request?: AgenticWalkthroughRequest
+): string {
+  const sections = [
+    request?.objective ??
+      `Create a walkthrough for the codebase in folder "${rootFolder}". Start by listing files to understand the structure, then explore the code.`,
+    `Working folder: ${rootFolder}`,
+  ];
+
+  if (request?.userGuidance?.trim()) {
+    sections.push(`User guidance:\n${request.userGuidance.trim()}`);
+  }
+
+  if (request?.walkthroughCatalog?.trim()) {
+    sections.push(`Existing walkthrough catalog:\n${request.walkthroughCatalog.trim()}`);
+  }
+
+  if (request?.targetWalkthroughJson?.trim()) {
+    sections.push(`Target walkthrough to transform:\n${request.targetWalkthroughJson.trim()}`);
+  }
+
+  if (request?.referenceWalkthroughsJson?.trim()) {
+    sections.push(`Reference walkthroughs:\n${request.referenceWalkthroughsJson.trim()}`);
+  }
+
+  sections.push("Start by listing files to understand the structure, then explore the code before producing the final walkthrough JSON.");
+
+  return sections.join("\n\n");
 }

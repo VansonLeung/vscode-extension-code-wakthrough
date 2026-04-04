@@ -25,13 +25,17 @@ Interactive, step-by-step guided tours of your codebase. Like a video player for
 
 ### 🤖 AI Generation
 - **One-click generation**: Right-click any folder and generate a walkthrough automatically
+- **Prompt-guided generation**: Tell the AI what to focus on, investigate, or drill into before it writes the walkthrough
 - **Context-aware**: Collects file structure, symbols, and code previews to feed to the AI
+- **Walkthrough-aware**: AI can relate new walkthroughs to existing ones when they cover adjacent flows or follow-up topics
+- **AI refactors existing walkthroughs**: Modify, extend, or refactor saved walkthroughs in place with extra instructions
 - **Multi-provider support**: Works with OpenAI, Anthropic, Ollama (local), Groq, Together AI, or any OpenAI-compatible API
-- **Three-tier fallback**: Tries VS Code's Copilot API first, then your configured endpoint, then falls back to clipboard
+- **Provider-driven AI**: Quick Scan and Deep Exploration both use the provider you configure, with clipboard fallback only when no provider is configured
 
 ### 🌳 Sidebar Explorer
 - **Tree view**: Browse all walkthroughs in your workspace
 - **Expandable steps**: See step details at a glance
+- **Related links**: Jump between connected walkthroughs from the tree or playback panel
 - **Quick actions**: Refresh, generate, record, and export from the sidebar
 - **File watcher**: Automatically updates when walkthrough files change
 
@@ -85,12 +89,25 @@ If your repository has `.walkthrough/*.json` files:
 ### 3. Generate with AI
 
 1. **Set up AI**: Command Palette → `Walkthrough: Setup AI Provider`
-   - Choose from OpenAI, Anthropic, Ollama, Groq, Together AI, or Custom
-   - Enter your API key (stored in VS Code settings)
+  - Choose from Copilot, OpenAI, Anthropic, Ollama, Groq, Together AI, or Custom
+  - Copilot will prompt for a model and remember it
+  - HTTP providers will prompt for endpoint/model/API key as needed
 2. **Generate**: Right-click any folder in the Explorer → "Generate Walkthrough for Folder"
    - Or use Command Palette → `Walkthrough: Generate Walkthrough with AI`
+3. **Pick a strategy**: `Quick Scan` and `Deep Exploration` both use the provider you configured
+4. **Guide the AI**: Enter an optional prompt such as “focus on auth flow”, “find the extension activation path”, or “drill into git repair logic”
+5. **Open related walkthroughs**: If the AI links the new walkthrough to others, use the related links in the panel or tree to jump across them
 
-### 4. Export
+### 4. Modify with AI
+
+1. **Choose a walkthrough**: In the sidebar, right-click a walkthrough and select `Modify / Extend / Refactor Walkthrough with AI`
+  - Or run it from the Command Palette and pick one or more walkthroughs
+2. **Pick a mode**: Modify, Extend, or Refactor
+3. **Add instructions**: Describe what to change, what to focus on, or what deeper path the walkthrough should cover
+4. **Optional references**: Select other walkthroughs as related context for the AI
+5. **Review**: Play the updated walkthrough or open the JSON directly
+
+### 5. Export
 
 1. **Sidebar**: Right-click any walkthrough → "Export Walkthrough"
    - Or click the ⬆ export icon in the sidebar title bar
@@ -107,6 +124,14 @@ Walkthroughs are stored as JSON in `.walkthrough/*.json`:
   "title": "Extension Architecture",
   "description": "A walkthrough of how this VSCode extension is structured",
   "commitSha": "abc1234",
+  "related": [
+    {
+      "path": ".walkthrough/ai-generation.json",
+      "title": "AI Generation Pipeline",
+      "type": "follow-up",
+      "note": "Drills into how prompts are built and parsed"
+    }
+  ],
   "steps": [
     {
       "file": "src/extension.ts",
@@ -124,6 +149,11 @@ Walkthroughs are stored as JSON in `.walkthrough/*.json`:
 - `title` (required): Walkthrough name
 - `description` (required): Short summary
 - `commitSha` (optional): Git commit when recorded — enables auto-repair
+- `related` (optional): Related walkthroughs in the same workspace
+  - `path` (required): Relative path to another walkthrough JSON, such as `.walkthrough/auth-flow.json`
+  - `title` (optional): Display title for the related walkthrough
+  - `type` (optional): `related`, `prerequisite`, `follow-up`, or `alternative`
+  - `note` (optional): Why the user might want to open that walkthrough next
 - `steps` (required): Array of step objects
   - `file` (required): Relative path from workspace root
   - `lines` (required): `[start, end]` line numbers (1-indexed)
@@ -148,8 +178,9 @@ Walkthroughs are stored as JSON in `.walkthrough/*.json`:
 | `Walkthrough: Stop Recording & Save` | — | Finish and save walkthrough |
 | `Walkthrough: Cancel Recording` | — | Discard recording |
 | `Walkthrough: Repair Walkthrough` | — | Rebase to HEAD using git |
-| `Walkthrough: Generate Walkthrough with AI` | — | Generate from picker |
-| `Walkthrough: Generate Walkthrough for Folder` | — | Right-click folder action |
+| `Walkthrough: Generate Walkthrough with AI` | — | Generate from picker with optional AI guidance |
+| `Walkthrough: Generate Walkthrough for Folder` | — | Right-click folder action with optional AI guidance |
+| `Walkthrough: Modify / Extend / Refactor Walkthrough with AI` | — | Rewrite existing walkthroughs with AI |
 | `Walkthrough: Setup AI Provider` | — | Configure AI endpoint |
 | `Walkthrough: Export Walkthrough` | — | Export to Markdown or HTML |
 | `Walkthrough: Refresh` | — | Refresh sidebar tree |
@@ -160,30 +191,37 @@ Configure AI providers in VS Code settings (`settings.json`):
 
 ```json
 {
+  "codeWalkthrough.ai.client": "copilot",
   "codeWalkthrough.ai.apiEndpoint": "https://api.openai.com/v1",
   "codeWalkthrough.ai.apiKey": "sk-...",
-  "codeWalkthrough.ai.model": "gpt-4o"
+  "codeWalkthrough.ai.model": "gpt-4o",
+  "codeWalkthrough.ai.copilotModel": ""
 }
 ```
 
-**Supported endpoints:**
-- OpenAI: `https://api.openai.com/v1`
-- Anthropic: `https://api.anthropic.com/v1`
+**Supported providers and endpoints:**
+- Copilot provider: uses VS Code's language model API and a selected Copilot chat model
+- OpenAI client: `https://api.openai.com/v1`
+- Anthropic client: `https://api.anthropic.com/v1`
 - Ollama (local): `http://localhost:11434/v1`
 - Groq: `https://api.groq.com/openai/v1`
 - Together AI: `https://api.together.xyz/v1`
 
-**Note:** API keys are stored in VS Code settings. For production use, consider using a key management solution.
+Set `codeWalkthrough.ai.client` to `copilot`, `openai`, or `anthropic` depending on which provider you want both `Quick Scan` and `Deep Exploration` to use.
+
+Set `codeWalkthrough.ai.copilotModel` to a specific Copilot model id if you want the Copilot provider to consistently use that model. If left blank and multiple Copilot models are available, the extension will ask you to pick one and remember it.
+
+**Note:** API keys are only needed for HTTP providers. Copilot uses your VS Code language model access.
 
 ## Requirements
 
 - VS Code 1.90.0 or higher
 - Git (for auto-repair features)
-- AI provider API key (for AI generation)
+- AI provider access: Copilot access or an HTTP provider API key (for AI generation)
 
 ## Known Issues
 
-- Anthropic API uses `x-api-key` header instead of `Authorization: Bearer`. Use an OpenAI-compatible proxy or custom endpoint if needed.
+- Deep Exploration requires the configured provider and model to support tool use. If a provider returns repeated empty responses, the extension stops early and recommends switching provider, protocol, or model.
 - Large folders may take time to process during AI generation (30+ files).
 - Content hashes use SHA256 — very large files may impact performance.
 

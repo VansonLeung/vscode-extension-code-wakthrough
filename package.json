@@ -2,7 +2,7 @@
   "name": "code-walkthrough",
   "displayName": "Code Walkthrough",
   "description": "Interactive step-by-step code walkthroughs with auto-navigation, line highlighting, and subtitle explanations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "code-walkthrough",
   "icon": "icon.png",
   "galleryBanner": {
@@ -56,7 +56,8 @@
       "codeWalkthrough": [
         {
           "id": "codeWalkthrough.explorer",
-          "name": "Walkthroughs"
+          "name": "Walkthroughs",
+          "icon": "$(book)"
         }
       ]
     },
@@ -99,6 +100,11 @@
       "view/item/context": [
         {
           "command": "codeWalkthrough.exportFile",
+          "when": "view == codeWalkthrough.explorer && viewItem == walkthrough",
+          "group": "inline"
+        },
+        {
+          "command": "codeWalkthrough.transformWithAI",
           "when": "view == codeWalkthrough.explorer && viewItem == walkthrough",
           "group": "inline"
         }
@@ -177,6 +183,12 @@
         "category": "Walkthrough"
       },
       {
+        "command": "codeWalkthrough.transformWithAI",
+        "title": "Modify / Extend / Refactor Walkthrough with AI",
+        "category": "Walkthrough",
+        "icon": "$(sparkle)"
+      },
+      {
         "command": "codeWalkthrough.refreshTree",
         "title": "Refresh",
         "category": "Walkthrough",
@@ -212,20 +224,36 @@
     "configuration": {
       "title": "Code Walkthrough",
       "properties": {
+        "codeWalkthrough.ai.client": {
+          "type": "string",
+          "default": "openai",
+          "enum": ["openai", "anthropic", "copilot"],
+          "enumDescriptions": [
+            "Use the OpenAI-compatible chat completions API",
+            "Use Anthropic's messages API",
+            "Use the VS Code Copilot language model API"
+          ],
+          "description": "Which AI provider to use for walkthrough generation and exploration"
+        },
         "codeWalkthrough.ai.apiEndpoint": {
           "type": "string",
           "default": "https://api.openai.com/v1",
-          "description": "OpenAI-compatible API endpoint (e.g. https://api.openai.com/v1, https://api.anthropic.com/v1, http://localhost:11434/v1 for Ollama)"
+          "description": "Base API endpoint for the selected HTTP client (ignored when provider is Copilot)"
         },
         "codeWalkthrough.ai.apiKey": {
           "type": "string",
           "default": "",
-          "description": "API key for the configured endpoint. Leave blank for Ollama/local models."
+          "description": "API key for the configured HTTP client and endpoint. Leave blank for Ollama/local models or Copilot."
         },
         "codeWalkthrough.ai.model": {
           "type": "string",
           "default": "gpt-4o",
-          "description": "Model name (e.g. gpt-4o, claude-sonnet-4-20250514, llama3, deepseek-coder)"
+          "description": "Model name or id for the selected provider (e.g. gpt-4o, claude-sonnet-4-20250514, llama3, or a Copilot model id)"
+        },
+        "codeWalkthrough.ai.copilotModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional VS Code Copilot model id to use when provider is Copilot. If blank and multiple models are available, the extension will ask you to choose and remember one."
         },
         "codeWalkthrough.ai.strategy": {
           "type": "string",
@@ -233,7 +261,7 @@
           "enum": ["quick", "deep"],
           "enumDescriptions": [
             "Quick Scan: Collects code context and sends it in one prompt (works with all providers)",
-            "Deep Exploration: LLM explores the codebase interactively using tools (requires OpenAI-compatible API with function calling)"
+            "Deep Exploration: LLM explores the codebase interactively using tools using the configured provider"
           ],
           "description": "Default AI generation strategy"
         }

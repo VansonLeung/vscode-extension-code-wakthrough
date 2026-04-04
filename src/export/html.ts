@@ -2,6 +2,19 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { Walkthrough, WalkthroughStep } from "../walkthrough/types";
 
+function relationLabel(type?: string): string {
+  switch (type) {
+    case "prerequisite":
+      return "Prerequisite";
+    case "follow-up":
+      return "Follow-up";
+    case "alternative":
+      return "Alternative";
+    default:
+      return "Related";
+  }
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -84,6 +97,19 @@ export async function exportToHtml(walkthrough: Walkthrough): Promise<string> {
     ? `<p class="commit">Commit: <code>${walkthrough.commitSha.slice(0, 7)}</code></p>`
     : "";
 
+  const relatedNote = walkthrough.related && walkthrough.related.length > 0
+    ? `<section class="related">
+        <h2>Related Walkthroughs</h2>
+        <ul>
+          ${walkthrough.related.map((relation) => {
+            const title = escapeHtml(relation.title ?? relation.path);
+            const note = relation.note ? ` <span class="related-note">${escapeHtml(relation.note)}</span>` : "";
+            return `<li><span class="related-type">${escapeHtml(relationLabel(relation.type))}</span> ${title} <code>${escapeHtml(relation.path)}</code>${note}</li>`;
+          }).join("")}
+        </ul>
+      </section>`
+    : "";
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -105,6 +131,13 @@ export async function exportToHtml(walkthrough: Walkthrough): Promise<string> {
   .description { color: #a1a1aa; margin-bottom: 0.5rem; }
   .commit { color: #71717a; font-size: 0.85rem; margin-bottom: 1.5rem; }
   .commit code { background: #27272a; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.85em; }
+  .related { margin-bottom: 1.5rem; padding: 1rem; background: #1f2937; border: 1px solid #374151; border-radius: 10px; }
+  .related h2 { font-size: 0.95rem; margin-bottom: 0.75rem; color: #e5e7eb; }
+  .related ul { padding-left: 1.25rem; }
+  .related li { margin-bottom: 0.4rem; color: #d4d4d8; }
+  .related code { background: #111827; padding: 0.15em 0.35em; border-radius: 4px; }
+  .related-type { color: #93c5fd; font-weight: 600; margin-right: 0.35rem; }
+  .related-note { color: #a1a1aa; }
   .toc { margin-bottom: 2rem; }
   .toc h2 { font-size: 1rem; color: #a1a1aa; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
   .toc ol { padding-left: 1.5rem; }
@@ -163,6 +196,7 @@ export async function exportToHtml(walkthrough: Walkthrough): Promise<string> {
   <h1>${escapeHtml(walkthrough.title)}</h1>
   <p class="description">${escapeHtml(walkthrough.description)}</p>
   ${commitNote}
+  ${relatedNote}
 
   <nav class="toc">
     <h2>Steps</h2>

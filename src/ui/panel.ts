@@ -35,9 +35,11 @@ export class WalkthroughPanel {
     });
 
     this.panel.webview.onDidReceiveMessage(
-      (msg: { command: string; index?: number }) => {
+      (msg: { command: string; index?: number; path?: string }) => {
         if (msg.command === "goTo" && msg.index !== undefined) {
           this.onCommandEmitter.fire(`goTo:${msg.index}`);
+        } else if (msg.command === "openRelated" && msg.path) {
+          this.onCommandEmitter.fire(`openRelated:${msg.path}`);
         } else {
           this.onCommandEmitter.fire(msg.command);
         }
@@ -225,6 +227,19 @@ export class WalkthroughPanel {
       )
       .join("");
 
+    const relatedHtml = walkthrough?.related && walkthrough.related.length > 0
+      ? `<div class="related-section">
+          <div class="related-heading">Related Walkthroughs</div>
+          <div class="related-list">
+            ${walkthrough.related.map((relation) => {
+              const note = relation.note ? `<span class="related-note">${escapeHtml(relation.note)}</span>` : "";
+              const type = relation.type ? `<span class="related-type">${escapeHtml(relation.type)}</span>` : "";
+              return `<button class="related-link" onclick='openRelated(${serializeJsString(relation.path)})'>${escapeHtml(relation.title ?? relation.path)}${type}</button>${note}`;
+            }).join("")}
+          </div>
+        </div>`
+      : "";
+
     return /*html*/ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -297,6 +312,47 @@ export class WalkthroughPanel {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px;
     }
+    .related-section {
+      margin: 0 0 16px;
+      padding: 12px;
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 6px;
+      background: var(--vscode-sideBar-background, rgba(255,255,255,0.03));
+    }
+    .related-heading {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      opacity: 0.8;
+    }
+    .related-list {
+      display: grid;
+      gap: 8px;
+    }
+    .related-link {
+      text-align: left;
+      border: 1px solid var(--vscode-button-secondaryBackground);
+      background: transparent;
+      color: var(--vscode-textLink-foreground);
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .related-link:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+    .related-type {
+      margin-left: 6px;
+      opacity: 0.6;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .related-note {
+      font-size: 11px;
+      opacity: 0.7;
+      margin-top: -2px;
+    }
   </style>
 </head>
 <body>
@@ -321,6 +377,7 @@ export class WalkthroughPanel {
   ${staleWarningHtml}
   <div class="file-label">${escapeHtml(fileLabel)}</div>
   <div class="subtitle-box">${escapeHtml(subtitle) || "<em>No subtitle</em>"}</div>
+  ${relatedHtml}
 
   <ul class="steps-list">
     ${stepsHtml}
@@ -334,6 +391,7 @@ export class WalkthroughPanel {
     const vscode = acquireVsCodeApi();
     function send(command) { vscode.postMessage({ command }); }
     function goTo(index) { vscode.postMessage({ command: 'goTo', index }); }
+    function openRelated(path) { vscode.postMessage({ command: 'openRelated', path }); }
   </script>
 </body>
 </html>`;
@@ -435,4 +493,8 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function serializeJsString(value: string): string {
+  return JSON.stringify(value);
 }

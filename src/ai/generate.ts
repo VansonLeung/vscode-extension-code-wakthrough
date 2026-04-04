@@ -2,14 +2,38 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as crypto from "crypto";
 import { CodeContext, collectCodeContext } from "./context";
-import { Walkthrough, WalkthroughStep } from "../walkthrough/types";
+import {
+  Walkthrough,
+  WalkthroughFile,
+  WalkthroughRelation,
+  WalkthroughStep,
+} from "../walkthrough/types";
+import { discoverWalkthroughs } from "../walkthrough/loader";
 import { getHeadSha } from "../git/git";
-import { chatCompletion, isAIConfigured } from "./openai-client";
-import { runAgenticGeneration } from "./agentic";
+import { chatCompletion, getAIConfig, isAIConfigured } from "./llm-client";
+import { AgenticWalkthroughRequest, runAgenticGeneration } from "./agentic";
 
 const log = vscode.window.createOutputChannel("Code Walkthrough");
+const RELATION_TYPES = new Set(["related", "prerequisite", "follow-up", "alternative"]);
 
 export type GenerationStrategy = "quick" | "deep";
+export type TransformMode = "modify" | "extend" | "refactor";
+
+interface PromptContextOptions {
+  userGuidance?: string;
+  walkthroughCatalog?: WalkthroughFile[];
+}
+
+interface TransformOptions {
+  mode: TransformMode;
+  userGuidance?: string;
+  target: WalkthroughFile;
+  references: WalkthroughFile[];
+}
+
+interface SaveOptions {
+  overwriteUri?: vscode.Uri;
+}
 
 function getDefaultStrategy(): GenerationStrategy {
   const config = vscode.workspace.getConfiguration("codeWalkthrough.ai");
@@ -19,66 +43,129 @@ function getDefaultStrategy(): GenerationStrategy {
 export async function generateWalkthrough(
   folderUri: vscode.Uri
 ): Promise<vscode.Uri | null> {
-  const defaultStrategy = getDefaultStrategy();
-
-  const pick = await vscode.window.showQuickPick(
-    [
-      {
-        label: "$(zap) Quick Scan",
-        description: "Sends code context in one shot (works with all providers including Copilot)",
-        strategy: "quick" as GenerationStrategy,
-      },
-      {
-        label: "$(search) Deep Exploration",
-        description: "LLM explores codebase interactively using tools (requires OpenAI-compatible API with function calling)",
-        strategy: "deep" as GenerationStrategy,
-      },
-    ],
-    {
-      placeHolder: "Choose generation strategy",
-    }
-  );
-
-  if (!pick) {
+  const strategy = await chooseStrategy();
+  if (!strategy) {
     return null;
   }
 
-  const strategy = pick.strategy ?? defaultStrategy;
-
-  if (strategy === "deep") {
-    return generateWithAgenticStrategy(folderUri);
+  const userGuidance = await promptForGuidance(
+    "Optional AI guidance",
+    "What should the walkthrough focus on, find out, or drill into? Leave blank to let the AI decide."
+  );
+  if (userGuidance === undefined) {
+    return null;
   }
 
-  return generateWithContextDumpStrategy(folderUri);
+  const walkthroughCatalog = await discoverWalkthroughs();
+  const options: PromptContextOptions = {
+    userGuidance,
+    walkthroughCatalog,
+  };
+
+  if (strategy === "deep") {
+    return generateWithAgenticStrategy(folderUri, options);
+  }
+
+  return generateWithContextDumpStrategy(folderUri, options);
+}
+
+export async function transformWalkthroughsWithAI(
+  targets: WalkthroughFile[]
+): Promise<vscode.Uri[]> {
+  if (targets.length === 0) {
+    return [];
+  }
+
+  const mode = await chooseTransformMode();
+  if (!mode) {
+    return [];
+  }
+
+  const userGuidance = await promptForGuidance(
+    `AI instructions for ${mode}`,
+    `Describe how the AI should ${mode} the selected walkthrough${targets.length === 1 ? "" : "s"}.`
+  );
+  if (userGuidance === undefined) {
+    return [];
+  }
+
+  const strategy = await chooseStrategy();
+  if (!strategy) {
+    return [];
+  }
+
+  const allWalkthroughs = await discoverWalkthroughs();
+  const targetUris = new Set(targets.map((target) => target.uri));
+  const referenceCandidates = allWalkthroughs.filter(
+    (file) => !targetUris.has(file.uri)
+  );
+  const references = await pickReferenceWalkthroughs(referenceCandidates);
+  if (references === null) {
+    return [];
+  }
+
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders) {
+    return [];
+  }
+
+  const folderUri = workspaceFolders[0].uri;
+  const results: vscode.Uri[] = [];
+
+  for (const target of targets) {
+    const options: TransformOptions = {
+      mode,
+      userGuidance,
+      target,
+      references,
+    };
+
+    const uri = strategy === "deep"
+      ? await transformWithAgenticStrategy(folderUri, options, allWalkthroughs)
+      : await transformWithContextDumpStrategy(folderUri, options, allWalkthroughs);
+
+    if (uri) {
+      results.push(uri);
+    }
+  }
+
+  return results;
 }
 
 async function generateWithAgenticStrategy(
-  folderUri: vscode.Uri
+  folderUri: vscode.Uri,
+  options: PromptContextOptions
 ): Promise<vscode.Uri | null> {
   if (!isAIConfigured()) {
     const action = await vscode.window.showWarningMessage(
-      "Deep Exploration requires an OpenAI-compatible API with tool/function calling support. Copilot is not supported for this strategy.",
+      "Deep Exploration requires a configured AI provider.",
       "Setup AI",
       "Use Quick Scan"
     );
     if (action === "Setup AI") {
-      vscode.commands.executeCommand("codeWalkthrough.setupAI");
+      void vscode.commands.executeCommand("codeWalkthrough.setupAI");
       return null;
     }
     if (action === "Use Quick Scan") {
-      return generateWithContextDumpStrategy(folderUri);
+      return generateWithContextDumpStrategy(folderUri, options);
     }
     return null;
   }
 
   try {
+    const request: AgenticWalkthroughRequest = {
+      objective: `Create a new walkthrough for the codebase in folder "${vscode.workspace.asRelativePath(folderUri, false)}".`,
+      userGuidance: options.userGuidance,
+      walkthroughCatalog: formatWalkthroughCatalog(options.walkthroughCatalog ?? []),
+    };
+
     const rawResponse = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title: "Deep exploration in progress...",
         cancellable: true,
       },
-      (progress, token) => runAgenticGeneration(folderUri, log, progress, token)
+      (progress, token) => runAgenticGeneration(folderUri, log, progress, token, request)
     );
 
     if (!rawResponse) {
@@ -95,7 +182,8 @@ async function generateWithAgenticStrategy(
 }
 
 async function generateWithContextDumpStrategy(
-  folderUri: vscode.Uri
+  folderUri: vscode.Uri,
+  options: PromptContextOptions
 ): Promise<vscode.Uri | null> {
   const context = await vscode.window.withProgress(
     {
@@ -111,88 +199,215 @@ async function generateWithContextDumpStrategy(
     return null;
   }
 
-  const prompt = buildPrompt(context);
-
-  const copilotModel = await selectCopilotModel();
-  if (copilotModel) {
-    return generateViaCopilot(copilotModel, prompt);
-  }
+  const prompt = buildPrompt(context, options);
 
   if (isAIConfigured()) {
-    return generateViaOpenAI(prompt);
+    return generateViaConfiguredProvider(prompt);
   }
 
   return fallbackToClipboard(prompt);
 }
 
-async function selectCopilotModel(): Promise<vscode.LanguageModelChat | null> {
-  try {
-    const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
-    if (models.length > 0) {
-      return models[0];
-    }
-  } catch {
-  }
-  return null;
-}
-
-async function generateViaCopilot(
-  model: vscode.LanguageModelChat,
-  prompt: string
+async function transformWithAgenticStrategy(
+  folderUri: vscode.Uri,
+  options: TransformOptions,
+  walkthroughCatalog: WalkthroughFile[]
 ): Promise<vscode.Uri | null> {
-  log.appendLine(`\n${"=".repeat(60)}`);
-  log.appendLine(`[API] Provider: VS Code Copilot Language Model API`);
-  log.appendLine(`[API] Model: ${model.id} (${model.vendor}/${model.family})`);
-  log.appendLine(`[API] Prompt length: ${prompt.length} chars`);
-  log.appendLine(`${"=".repeat(60)}`);
+  if (!isAIConfigured()) {
+    const action = await vscode.window.showWarningMessage(
+      "Deep Exploration requires a configured AI provider.",
+      "Setup AI",
+      "Use Quick Scan"
+    );
+    if (action === "Setup AI") {
+      void vscode.commands.executeCommand("codeWalkthrough.setupAI");
+      return null;
+    }
+    if (action === "Use Quick Scan") {
+      return transformWithContextDumpStrategy(folderUri, options, walkthroughCatalog);
+    }
+    return null;
+  }
 
-  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
-  const tokenSource = new vscode.CancellationTokenSource();
+  const request: AgenticWalkthroughRequest = {
+    objective: buildTransformObjective(options),
+    userGuidance: options.userGuidance,
+    walkthroughCatalog: formatWalkthroughCatalog(
+      walkthroughCatalog.filter((file) => file.uri !== options.target.uri)
+    ),
+    targetWalkthroughJson: JSON.stringify(options.target.walkthrough, null, 2),
+    referenceWalkthroughsJson: options.references.length > 0
+      ? JSON.stringify(
+          options.references.map((file) => ({
+            path: file.relativePath,
+            walkthrough: file.walkthrough,
+          })),
+          null,
+          2
+        )
+      : undefined,
+  };
 
   try {
-    const response = await vscode.window.withProgress(
+    const rawResponse = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Generating walkthrough via Copilot...",
+        title: `${transformModeLabel(options.mode)} ${options.target.walkthrough.title} with AI...`,
         cancellable: true,
       },
-      async (progress, token) => {
-        token.onCancellationRequested(() => tokenSource.cancel());
-        const chatResponse = await model.sendRequest(
-          messages,
-          {},
-          tokenSource.token
-        );
-        let fullText = "";
-        for await (const chunk of chatResponse.text) {
-          fullText += chunk;
-          progress.report({ message: `${fullText.length} chars received...` });
-        }
-        return fullText;
-      }
+      (progress, token) => runAgenticGeneration(folderUri, log, progress, token, request)
     );
-    log.appendLine(`[Copilot] Response length: ${response.length}`);
-    log.appendLine(`[Copilot] Response (first 2000 chars):\n${response.slice(0, 2000)}`);
-    return parseAndSave(response);
+
+    if (!rawResponse) {
+      return null;
+    }
+
+    return parseAndSave(rawResponse, {
+      overwriteUri: vscode.Uri.file(options.target.uri),
+    });
   } catch (err) {
-    if (err instanceof vscode.LanguageModelError) {
-      vscode.window.showErrorMessage(`Copilot failed: ${err.message}`);
-    }
-    if (isAIConfigured()) {
-      return generateViaOpenAI(prompt);
-    }
-    return fallbackToClipboard(prompt);
-  } finally {
-    tokenSource.dispose();
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    log.appendLine(`[Agentic Transform] Fatal error: ${msg}`);
+    vscode.window.showErrorMessage(`AI transform failed: ${msg}. Check 'Code Walkthrough' output.`);
+    return null;
   }
 }
 
-async function generateViaOpenAI(prompt: string): Promise<vscode.Uri | null> {
+async function transformWithContextDumpStrategy(
+  folderUri: vscode.Uri,
+  options: TransformOptions,
+  walkthroughCatalog: WalkthroughFile[]
+): Promise<vscode.Uri | null> {
+  const context = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `Collecting code context for ${options.target.walkthrough.title}...`,
+      cancellable: false,
+    },
+    () => collectCodeContext(folderUri)
+  );
+
+  if (context.files.length === 0) {
+    vscode.window.showWarningMessage("No source files found in the workspace.");
+    return null;
+  }
+
+  const prompt = buildTransformPrompt(context, options, walkthroughCatalog);
+
+  if (isAIConfigured()) {
+    return generateViaConfiguredProvider(prompt, {
+      overwriteUri: vscode.Uri.file(options.target.uri),
+    });
+  }
+
+  return fallbackToClipboard(prompt, {
+    overwriteUri: vscode.Uri.file(options.target.uri),
+  });
+}
+
+async function chooseStrategy(): Promise<GenerationStrategy | null> {
+  const defaultStrategy = getDefaultStrategy();
+  const pick = await vscode.window.showQuickPick(
+    [
+      {
+        label: "$(zap) Quick Scan",
+        description: "Sends code context in one shot (works with all providers including Copilot)",
+        strategy: "quick" as GenerationStrategy,
+      },
+      {
+        label: "$(search) Deep Exploration",
+        description: "LLM explores codebase interactively using tools using the configured provider",
+        strategy: "deep" as GenerationStrategy,
+      },
+    ],
+    {
+      placeHolder: `Choose generation strategy (default: ${defaultStrategy})`,
+      ignoreFocusOut: true,
+    }
+  );
+
+  return pick?.strategy ?? null;
+}
+
+async function chooseTransformMode(): Promise<TransformMode | null> {
+  const pick = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Modify",
+        description: "Adjust the walkthrough in place",
+        mode: "modify" as TransformMode,
+      },
+      {
+        label: "Extend",
+        description: "Add missing depth, branches, or supporting steps",
+        mode: "extend" as TransformMode,
+      },
+      {
+        label: "Refactor",
+        description: "Reorder and rewrite for clarity or a new narrative",
+        mode: "refactor" as TransformMode,
+      },
+    ],
+    {
+      placeHolder: "How should AI change the selected walkthrough(s)?",
+      ignoreFocusOut: true,
+    }
+  );
+
+  return pick?.mode ?? null;
+}
+
+async function promptForGuidance(
+  prompt: string,
+  placeHolder: string
+): Promise<string | undefined> {
+  return vscode.window.showInputBox({
+    prompt,
+    placeHolder,
+    ignoreFocusOut: true,
+  });
+}
+
+async function pickReferenceWalkthroughs(
+  options: WalkthroughFile[]
+): Promise<WalkthroughFile[] | null> {
+  if (options.length === 0) {
+    return [];
+  }
+
+  const picks = await vscode.window.showQuickPick(
+    options.map((file) => ({
+      label: file.walkthrough.title,
+      description: file.relativePath,
+      detail: file.walkthrough.description,
+      file,
+    })),
+    {
+      canPickMany: true,
+      placeHolder: "Optional: pick other walkthroughs to use as related context",
+      ignoreFocusOut: true,
+    }
+  );
+
+  return picks ? picks.map((pick) => pick.file) : null;
+}
+
+async function generateViaConfiguredProvider(
+  prompt: string,
+  saveOptions?: SaveOptions
+): Promise<vscode.Uri | null> {
+  const config = getAIConfig();
+  const providerLabel = config.client === "copilot"
+    ? "Copilot"
+    : config.client === "anthropic"
+      ? "Anthropic"
+      : "OpenAI-compatible API";
+
   try {
     const response = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Generating walkthrough via API...",
+        title: `Generating walkthrough via ${providerLabel}...`,
         cancellable: true,
       },
       async (progress, token) => {
@@ -204,29 +419,31 @@ async function generateViaOpenAI(prompt: string): Promise<vscode.Uri | null> {
         );
       }
     );
-    log.appendLine(`[OpenAI] Response length: ${response.length}`);
-    log.appendLine(`[OpenAI] Response (first 2000 chars):\n${response.slice(0, 2000)}`);
-    return parseAndSave(response);
+    log.appendLine(`[${providerLabel}] Response length: ${response.length}`);
+    log.appendLine(`[${providerLabel}] Response (first 2000 chars):\n${response.slice(0, 2000)}`);
+    return parseAndSave(response, saveOptions);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    log.appendLine(`[OpenAI] Error: ${msg}`);
-    vscode.window.showErrorMessage(`API request failed: ${msg}`);
-    return fallbackToClipboard(prompt);
+    log.appendLine(`[${providerLabel}] Error: ${msg}`);
+    vscode.window.showErrorMessage(`${providerLabel} request failed: ${msg}`);
+    return null;
   }
 }
 
-async function fallbackToClipboard(prompt: string): Promise<vscode.Uri | null> {
+async function fallbackToClipboard(
+  prompt: string,
+  saveOptions?: SaveOptions
+): Promise<vscode.Uri | null> {
   await vscode.env.clipboard.writeText(prompt);
 
   const action = await vscode.window.showInformationMessage(
-    "No AI model available. Prompt copied to clipboard. " +
-    "Configure an API key via 'Walkthrough: Setup AI Provider', or paste the prompt into your LLM manually.",
+    "No AI model available. Prompt copied to clipboard. Configure an API key via 'Walkthrough: Setup AI Provider', or paste the prompt into your LLM manually.",
     "Setup AI",
     "Paste Response"
   );
 
   if (action === "Setup AI") {
-    vscode.commands.executeCommand("codeWalkthrough.setupAI");
+    void vscode.commands.executeCommand("codeWalkthrough.setupAI");
     return null;
   }
 
@@ -234,16 +451,20 @@ async function fallbackToClipboard(prompt: string): Promise<vscode.Uri | null> {
     const json = await vscode.window.showInputBox({
       prompt: "Paste the walkthrough JSON from your LLM",
       placeHolder: '{ "title": "...", "steps": [...] }',
+      ignoreFocusOut: true,
     });
     if (json) {
-      return parseAndSave(json);
+      return parseAndSave(json, saveOptions);
     }
   }
 
   return null;
 }
 
-async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
+async function parseAndSave(
+  rawResponse: string,
+  saveOptions?: SaveOptions
+): Promise<vscode.Uri | null> {
   log.appendLine(`[Parse] Raw response length: ${rawResponse.length}`);
   log.appendLine(`[Parse] Raw response:\n---START---\n${rawResponse}\n---END---`);
   log.show(true);
@@ -264,6 +485,12 @@ async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
     const parsed = JSON.parse(jsonMatch[0]) as {
       title?: string;
       description?: string;
+      related?: Array<{
+        path?: string;
+        title?: string;
+        type?: string;
+        note?: string;
+      }>;
       steps?: Array<{
         file?: string;
         lines?: [number, number];
@@ -288,22 +515,21 @@ async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
 
     const rootPath = workspaceFolders[0].uri.fsPath;
     const commitSha = await getHeadSha();
+    const related = normalizeRelations(parsed.related);
 
     const steps: WalkthroughStep[] = [];
-    for (const s of parsed.steps) {
-      if (!s.file || !s.lines || !s.subtitle) {
+    for (const step of parsed.steps) {
+      if (!step.file || !step.lines || !step.subtitle) {
         continue;
       }
 
-      const filePath = path.resolve(rootPath, s.file);
+      const filePath = path.resolve(rootPath, step.file);
       let contentHash: string | undefined;
 
       try {
-        const doc = await vscode.workspace.openTextDocument(
-          vscode.Uri.file(filePath)
-        );
-        const startLine = Math.max(0, s.lines[0] - 1);
-        const endLine = Math.min(doc.lineCount - 1, s.lines[1] - 1);
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+        const startLine = Math.max(0, step.lines[0] - 1);
+        const endLine = Math.min(doc.lineCount - 1, step.lines[1] - 1);
         const content = doc.getText(
           new vscode.Range(startLine, 0, endLine, doc.lineAt(endLine).text.length)
         );
@@ -316,12 +542,12 @@ async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
       }
 
       steps.push({
-        file: s.file,
-        lines: s.lines,
-        symbol: s.symbol,
+        file: step.file,
+        lines: step.lines,
+        symbol: step.symbol,
         contentHash,
-        subtitle: s.subtitle,
-        duration: s.duration ?? 8,
+        subtitle: step.subtitle,
+        duration: step.duration ?? 8,
       });
     }
 
@@ -334,14 +560,13 @@ async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
       title: parsed.title,
       description: parsed.description ?? "",
       commitSha: commitSha ?? undefined,
+      ...(related.length > 0 ? { related } : {}),
       steps,
     };
 
     const walkthroughDir = path.join(rootPath, ".walkthrough");
     try {
-      await vscode.workspace.fs.createDirectory(
-        vscode.Uri.file(walkthroughDir)
-      );
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(walkthroughDir));
     } catch {
     }
 
@@ -350,13 +575,13 @@ async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
     const fileName = `${slug}.json`;
-    const uri = vscode.Uri.file(path.join(walkthroughDir, fileName));
+    const uri = saveOptions?.overwriteUri ?? vscode.Uri.file(path.join(walkthroughDir, fileName));
 
     const content = JSON.stringify(walkthrough, null, 2) + "\n";
     await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf-8"));
 
     vscode.window.showInformationMessage(
-      `AI walkthrough saved: .walkthrough/${fileName} (${steps.length} steps)`
+      `${saveOptions?.overwriteUri ? "AI walkthrough updated" : "AI walkthrough saved"}: ${vscode.workspace.asRelativePath(uri, false)} (${steps.length} steps)`
     );
 
     return uri;
@@ -369,52 +594,244 @@ async function parseAndSave(rawResponse: string): Promise<vscode.Uri | null> {
   }
 }
 
-function buildPrompt(context: CodeContext): string {
+function buildPrompt(context: CodeContext, options?: PromptContextOptions): string {
   const fileList = context.files
-    .map((f) => `- ${f.relativePath} (${f.lineCount} lines) [${f.symbols.slice(0, 8).join(", ")}]`)
+    .map((file) => `- ${file.relativePath} (${file.lineCount} lines) [${file.symbols.slice(0, 8).join(", ")}]`)
     .join("\n");
 
   const filePreviews = context.files
-    .map((f) => `=== ${f.relativePath} ===\n${f.preview}`)
+    .map((file) => `=== ${file.relativePath} ===\n${file.preview}`)
     .join("\n\n");
 
-  return `You are a senior developer creating an interactive code walkthrough for a codebase.
+  const sections = [
+    "You are a senior developer creating an interactive code walkthrough for a codebase.",
+    "",
+    "TASK: Generate a step-by-step walkthrough JSON that explains how this code works. The walkthrough should guide a new developer through the codebase in a logical order, starting from entry points and following the execution flow.",
+  ];
 
-TASK: Generate a step-by-step walkthrough JSON that explains how this code works. The walkthrough should guide a new developer through the codebase in a logical order, starting from entry points and following the execution flow.
+  if (options?.userGuidance?.trim()) {
+    sections.push("", `USER GUIDANCE:\n${options.userGuidance.trim()}`);
+  }
 
-CODEBASE STRUCTURE:
-Root folder: ${context.rootFolder}
-Total files: ${context.files.length}
-Total lines: ${context.totalLines}
+  const catalog = formatWalkthroughCatalog(options?.walkthroughCatalog ?? []);
+  if (catalog) {
+    sections.push("", `EXISTING WALKTHROUGHS:\n${catalog}`);
+  }
 
-FILES AND SYMBOLS:
-${fileList}
+  sections.push(
+    "",
+    "CODEBASE STRUCTURE:",
+    `Root folder: ${context.rootFolder}`,
+    `Total files: ${context.files.length}`,
+    `Total lines: ${context.totalLines}`,
+    "",
+    "FILES AND SYMBOLS:",
+    fileList,
+    "",
+    "FILE CONTENTS:",
+    filePreviews,
+    "",
+    "OUTPUT FORMAT - Return ONLY valid JSON matching this exact structure:",
+    "{",
+    '  "title": "Short descriptive title",',
+    '  "description": "One sentence describing what this walkthrough covers",',
+    '  "related": [',
+    "    {",
+    '      "path": ".walkthrough/other-walkthrough.json",',
+    '      "title": "Optional title",',
+    '      "type": "related",',
+    '      "note": "Optional reason this is worth opening next"',
+    "    }",
+    "  ],",
+    '  "steps": [',
+    "    {",
+    '      "file": "relative/path/to/file.ts",',
+    '      "lines": [startLine, endLine],',
+    '      "symbol": "nearestFunctionOrClassName",',
+    '      "subtitle": "2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",',
+    '      "duration": 8',
+    "    }",
+    "  ]",
+    "}",
+    "",
+    "REQUIREMENTS:",
+    "- 5-15 steps depending on codebase size",
+    "- Start from entry points (main, index, app) and follow the execution flow",
+    "- Each step should highlight 3-20 lines (focused, not entire files)",
+    "- Line numbers must be 1-indexed and accurate for the file contents shown",
+    "- Subtitles should explain WHAT the code does and WHY, not just restate the code",
+    "- Use the actual symbol names from the code",
+    "- Include \"related\" only when another walkthrough in the catalog is genuinely useful context",
+    "- If you include \"related\", the \"path\" must exactly match a catalog entry",
+    "- Order steps to tell a coherent story (setup → core logic → helpers → output)",
+    "- Do NOT wrap the JSON in markdown code fences"
+  );
 
-FILE CONTENTS:
-${filePreviews}
-
-OUTPUT FORMAT - Return ONLY valid JSON matching this exact structure:
-{
-  "title": "Short descriptive title",
-  "description": "One sentence describing what this walkthrough covers",
-  "steps": [
-    {
-      "file": "relative/path/to/file.ts",
-      "lines": [startLine, endLine],
-      "symbol": "nearestFunctionOrClassName",
-      "subtitle": "2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",
-      "duration": 8
-    }
-  ]
+  return sections.join("\n");
 }
 
-REQUIREMENTS:
-- 5-15 steps depending on codebase size
-- Start from entry points (main, index, app) and follow the execution flow
-- Each step should highlight 3-20 lines (focused, not entire files)
-- Line numbers must be 1-indexed and accurate for the file contents shown
-- Subtitles should explain WHAT the code does and WHY, not just restate the code
-- Use the actual symbol names from the code
-- Order steps to tell a coherent story (setup → core logic → helpers → output)
-- Do NOT wrap the JSON in markdown code fences`;
+function buildTransformPrompt(
+  context: CodeContext,
+  options: TransformOptions,
+  walkthroughCatalog: WalkthroughFile[]
+): string {
+  const fileList = context.files
+    .map((file) => `- ${file.relativePath} (${file.lineCount} lines) [${file.symbols.slice(0, 8).join(", ")}]`)
+    .join("\n");
+
+  const filePreviews = context.files
+    .map((file) => `=== ${file.relativePath} ===\n${file.preview}`)
+    .join("\n\n");
+
+  const sections = [
+    `You are a senior developer ${transformModeLabel(options.mode).toLowerCase()} an interactive code walkthrough.`,
+    "",
+    `TASK: ${buildTransformObjective(options)}`,
+    "",
+    "TARGET WALKTHROUGH JSON:",
+    JSON.stringify(options.target.walkthrough, null, 2),
+  ];
+
+  if (options.references.length > 0) {
+    sections.push(
+      "",
+      "REFERENCE WALKTHROUGHS:",
+      JSON.stringify(
+        options.references.map((file) => ({
+          path: file.relativePath,
+          walkthrough: file.walkthrough,
+        })),
+        null,
+        2
+      )
+    );
+  }
+
+  if (options.userGuidance?.trim()) {
+    sections.push("", `USER GUIDANCE:\n${options.userGuidance.trim()}`);
+  }
+
+  const catalog = formatWalkthroughCatalog(
+    walkthroughCatalog.filter((file) => file.uri !== options.target.uri)
+  );
+  if (catalog) {
+    sections.push("", `EXISTING WALKTHROUGH CATALOG:\n${catalog}`);
+  }
+
+  sections.push(
+    "",
+    "CODEBASE STRUCTURE:",
+    `Root folder: ${context.rootFolder}`,
+    `Total files: ${context.files.length}`,
+    `Total lines: ${context.totalLines}`,
+    "",
+    "FILES AND SYMBOLS:",
+    fileList,
+    "",
+    "FILE CONTENTS:",
+    filePreviews,
+    "",
+    "OUTPUT FORMAT - Return ONLY valid JSON matching this exact structure:",
+    "{",
+    '  "title": "Short descriptive title",',
+    '  "description": "One sentence describing what this walkthrough covers",',
+    '  "related": [',
+    "    {",
+    '      "path": ".walkthrough/other-walkthrough.json",',
+    '      "title": "Optional title",',
+    '      "type": "related",',
+    '      "note": "Optional reason this is worth opening next"',
+    "    }",
+    "  ],",
+    '  "steps": [',
+    "    {",
+    '      "file": "relative/path/to/file.ts",',
+    '      "lines": [startLine, endLine],',
+    '      "symbol": "nearestFunctionOrClassName",',
+    '      "subtitle": "2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",',
+    '      "duration": 8',
+    "    }",
+    "  ]",
+    "}",
+    "",
+    "REQUIREMENTS:",
+    "- Keep the walkthrough grounded in the actual code shown",
+    "- Preserve the current walkthrough's purpose unless the user guidance clearly changes it",
+    "- For extend, add genuinely missing steps or deeper detail instead of rephrasing the same content",
+    "- For refactor, improve structure, sequencing, and clarity",
+    "- For modify, make the requested targeted changes without unnecessary churn",
+    "- Include \"related\" only when another walkthrough in the catalog is genuinely useful context",
+    "- If you include \"related\", the \"path\" must exactly match a catalog entry",
+    "- Return JSON only with no markdown fences"
+  );
+
+  return sections.join("\n");
+}
+
+function buildTransformObjective(options: TransformOptions): string {
+  const title = options.target.walkthrough.title;
+  switch (options.mode) {
+    case "extend":
+      return `Extend the existing walkthrough "${title}" with stronger coverage, better drill-down, and any missing steps that matter.`;
+    case "refactor":
+      return `Refactor the existing walkthrough "${title}" so the narrative is clearer, better ordered, and easier for a new developer to follow.`;
+    default:
+      return `Modify the existing walkthrough "${title}" based on the requested focus and keep the changes targeted.`;
+  }
+}
+
+function transformModeLabel(mode: TransformMode): string {
+  switch (mode) {
+    case "extend":
+      return "Extending";
+    case "refactor":
+      return "Refactoring";
+    default:
+      return "Modifying";
+  }
+}
+
+function normalizeRelations(
+  related: Array<{ path?: string; title?: string; type?: string; note?: string }> | undefined
+): WalkthroughRelation[] {
+  if (!related) {
+    return [];
+  }
+
+  return related.flatMap((relation) => {
+    if (!relation.path) {
+      return [];
+    }
+
+    const normalized: WalkthroughRelation = {
+      path: relation.path.replace(/\\/g, "/").replace(/^\.\//, ""),
+    };
+
+    if (relation.title) {
+      normalized.title = relation.title;
+    }
+    if (relation.type && RELATION_TYPES.has(relation.type)) {
+      normalized.type = relation.type as WalkthroughRelation["type"];
+    }
+    if (relation.note) {
+      normalized.note = relation.note;
+    }
+
+    return [normalized];
+  });
+}
+
+function formatWalkthroughCatalog(files: WalkthroughFile[]): string {
+  if (files.length === 0) {
+    return "";
+  }
+
+  return files
+    .map((file) => {
+      const relatedSummary = file.walkthrough.related?.length
+        ? `; related: ${file.walkthrough.related.map((relation) => relation.path).join(", ")}`
+        : "";
+      return `- path: ${file.relativePath}; title: ${file.walkthrough.title}; description: ${file.walkthrough.description}; steps: ${file.walkthrough.steps.length}${relatedSummary}`;
+    })
+    .join("\n");
 }

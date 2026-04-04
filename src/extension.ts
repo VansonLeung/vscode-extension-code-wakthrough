@@ -9,7 +9,8 @@ import { Recorder } from "./recorder/recorder";
 import { StatusBarController } from "./ui/statusbar";
 import { WalkthroughFile } from "./walkthrough/types";
 import { repairWalkthrough, saveRepairedWalkthrough } from "./git/repair";
-import { generateWalkthrough } from "./ai/generate";
+import { generateWalkthrough, transformWalkthroughsWithAI } from "./ai/generate";
+import { chooseCopilotModel, getAIConfig } from "./ai/llm-client";
 import { exportToMarkdown } from "./export/markdown";
 import { exportToHtml } from "./export/html";
 
@@ -119,6 +120,8 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand("setContext", "codeWalkthrough.recording", false);
     } else if (command === "repair") {
       repairCurrentWalkthrough();
+    } else if (command.startsWith("openRelated:")) {
+      void openLinkedWalkthrough(command.slice("openRelated:".length));
     }
   });
 
@@ -147,12 +150,18 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("codeWalkthrough.generate", generateFromPicker),
     vscode.commands.registerCommand("codeWalkthrough.generateFromFolder", (uri: vscode.Uri) => {
-      runGeneration(uri);
+      void runGeneration(uri);
+    }),
+    vscode.commands.registerCommand("codeWalkthrough.transformWithAI", (file?: WalkthroughFile) => {
+      void transformWalkthroughWithAI(file);
+    }),
+    vscode.commands.registerCommand("codeWalkthrough.openLinkedWalkthrough", (relativePath: string) => {
+      void openLinkedWalkthrough(relativePath);
     }),
     vscode.commands.registerCommand("codeWalkthrough.setupAI", setupAIProvider),
     vscode.commands.registerCommand("codeWalkthrough.export", exportWalkthrough),
     vscode.commands.registerCommand("codeWalkthrough.exportFile", (file: WalkthroughFile) => {
-      exportWalkthroughFile(file);
+      void exportWalkthroughFile(file);
     })
   );
 
@@ -303,7 +312,7 @@ async function runGeneration(folderUri: vscode.Uri): Promise<void> {
       "View JSON"
     );
     if (action === "Play") {
-      await openWalkthrough();
+      await openGeneratedWalkthrough(uri.fsPath);
     } else if (action === "View JSON") {
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc);
@@ -311,15 +320,105 @@ async function runGeneration(folderUri: vscode.Uri): Promise<void> {
   }
 }
 
+async function transformWalkthroughWithAI(preselected?: WalkthroughFile): Promise<void> {
+  const files = await discoverWalkthroughs();
+
+  if (files.length === 0) {
+    vscode.window.showInformationMessage("No walkthroughs found to modify with AI.");
+    return;
+  }
+
+  const targets = preselected ? [preselected] : await pickTransformTargets(files);
+  if (!targets || targets.length === 0) {
+    return;
+  }
+
+  const uris = await transformWalkthroughsWithAI(targets);
+  if (uris.length === 0) {
+    return;
+  }
+
+  await treeProvider.refresh();
+
+  if (uris.length === 1) {
+    const action = await vscode.window.showInformationMessage(
+      "Walkthrough updated with AI.",
+      "Play",
+      "View JSON"
+    );
+
+    if (action === "Play") {
+      await openGeneratedWalkthrough(uris[0].fsPath);
+    } else if (action === "View JSON") {
+      const doc = await vscode.workspace.openTextDocument(uris[0]);
+      await vscode.window.showTextDocument(doc);
+    }
+    return;
+  }
+
+  vscode.window.showInformationMessage(`${uris.length} walkthroughs updated with AI.`);
+}
+
+async function pickTransformTargets(
+  files: WalkthroughFile[]
+): Promise<WalkthroughFile[] | undefined> {
+  const picks = await vscode.window.showQuickPick(
+    files.map((file) => ({
+      label: file.walkthrough.title,
+      description: file.relativePath,
+      detail: file.walkthrough.description,
+      file,
+    })),
+    {
+      canPickMany: true,
+      placeHolder: "Pick walkthroughs to modify / extend / refactor with AI",
+      ignoreFocusOut: true,
+    }
+  );
+
+  return picks?.map((pick) => pick.file);
+}
+
+async function openGeneratedWalkthrough(fsPath: string): Promise<void> {
+  const files = await discoverWalkthroughs();
+  const match = files.find((file) => file.uri === fsPath);
+  if (match) {
+    await beginPlayback(match);
+    return;
+  }
+
+  await openWalkthrough();
+}
+
+async function openLinkedWalkthrough(relativePath: string): Promise<void> {
+  const normalized = normalizeWalkthroughPath(relativePath);
+  const files = await discoverWalkthroughs();
+  const match = files.find(
+    (file) => normalizeWalkthroughPath(file.relativePath) === normalized
+  );
+
+  if (!match) {
+    vscode.window.showWarningMessage(`Related walkthrough not found: ${relativePath}`);
+    return;
+  }
+
+  await beginPlayback(match);
+}
+
+function normalizeWalkthroughPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
 async function setupAIProvider(): Promise<void> {
   const provider = await vscode.window.showQuickPick(
     [
-      { label: "OpenAI", description: "api.openai.com", endpoint: "https://api.openai.com/v1", model: "gpt-4o" },
-      { label: "Anthropic (OpenAI-compatible)", description: "api.anthropic.com", endpoint: "https://api.anthropic.com/v1", model: "claude-sonnet-4-20250514" },
-      { label: "Ollama (local)", description: "localhost:11434", endpoint: "http://localhost:11434/v1", model: "llama3" },
-      { label: "Groq", description: "api.groq.com", endpoint: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
-      { label: "Together AI", description: "api.together.xyz", endpoint: "https://api.together.xyz/v1", model: "meta-llama/Llama-3-70b-chat-hf" },
-      { label: "Custom endpoint", description: "Enter your own", endpoint: "", model: "" },
+      { label: "Copilot", description: "VS Code language model API", client: "copilot", endpoint: "", model: "" },
+      { label: "OpenAI", description: "api.openai.com", client: "openai", endpoint: "https://api.openai.com/v1", model: "gpt-4o" },
+      { label: "Anthropic", description: "api.anthropic.com", client: "anthropic", endpoint: "https://api.anthropic.com/v1", model: "claude-sonnet-4-20250514" },
+      { label: "Ollama (local)", description: "localhost:11434", client: "openai", endpoint: "http://localhost:11434/v1", model: "llama3" },
+      { label: "Groq", description: "api.groq.com", client: "openai", endpoint: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
+      { label: "Together AI", description: "api.together.xyz", client: "openai", endpoint: "https://api.together.xyz/v1", model: "meta-llama/Llama-3-70b-chat-hf" },
+      { label: "Custom endpoint", description: "Choose OpenAI or Anthropic protocol", client: undefined, endpoint: "", model: "" },
     ],
     { placeHolder: "Select your AI provider" }
   );
@@ -330,13 +429,49 @@ async function setupAIProvider(): Promise<void> {
 
   const config = vscode.workspace.getConfiguration("codeWalkthrough.ai");
 
+  let client = provider.client;
   let endpoint = provider.endpoint;
   let model = provider.model;
 
+  if (client === "copilot") {
+    const selectedModel = await chooseCopilotModel(
+      "Select the Copilot model to use for walkthrough generation",
+      true,
+      getAIConfig()
+    );
+    if (!selectedModel) {
+      vscode.window.showWarningMessage("No Copilot models are available.");
+      return;
+    }
+
+    await config.update("client", "copilot", vscode.ConfigurationTarget.Global);
+    await config.update("copilotModel", selectedModel.id, vscode.ConfigurationTarget.Global);
+    await config.update("model", selectedModel.id, vscode.ConfigurationTarget.Global);
+    await config.update("apiEndpoint", "", vscode.ConfigurationTarget.Global);
+    await config.update("apiKey", "", vscode.ConfigurationTarget.Global);
+
+    vscode.window.showInformationMessage(
+      `AI configured: Copilot (${selectedModel.id}). Quick Scan and Deep Exploration will use this model.`
+    );
+    return;
+  }
+
   if (!endpoint) {
+    const protocol = await vscode.window.showQuickPick(
+      [
+        { label: "OpenAI-compatible client", client: "openai" as const },
+        { label: "Anthropic client", client: "anthropic" as const },
+      ],
+      { placeHolder: "Which protocol does the custom endpoint use?" }
+    );
+    if (!protocol) {
+      return;
+    }
+    client = protocol.client;
+
     const customEndpoint = await vscode.window.showInputBox({
       prompt: "API endpoint URL",
-      placeHolder: "https://api.example.com/v1",
+      placeHolder: client === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.example.com/v1",
     });
     if (!customEndpoint) {
       return;
@@ -345,11 +480,12 @@ async function setupAIProvider(): Promise<void> {
 
     const customModel = await vscode.window.showInputBox({
       prompt: "Model name",
-      placeHolder: "gpt-4o",
+      placeHolder: client === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o",
     });
-    model = customModel ?? "gpt-4o";
+    model = customModel ?? (client === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
   }
 
+  await config.update("client", client, vscode.ConfigurationTarget.Global);
   await config.update("apiEndpoint", endpoint, vscode.ConfigurationTarget.Global);
   await config.update("model", model, vscode.ConfigurationTarget.Global);
 
@@ -357,7 +493,7 @@ async function setupAIProvider(): Promise<void> {
   if (!isLocal) {
     const apiKey = await vscode.window.showInputBox({
       prompt: `API key for ${provider.label}`,
-      placeHolder: "sk-...",
+      placeHolder: client === "anthropic" ? "sk-ant-..." : "sk-...",
       password: true,
     });
     if (apiKey) {
@@ -366,7 +502,7 @@ async function setupAIProvider(): Promise<void> {
   }
 
   vscode.window.showInformationMessage(
-    `AI configured: ${provider.label} (${model}). Try 'Walkthrough: Generate Walkthrough with AI' now.`
+    `AI configured: ${provider.label} via ${client} client (${model}). Try 'Walkthrough: Generate Walkthrough with AI' now.`
   );
 }
 
