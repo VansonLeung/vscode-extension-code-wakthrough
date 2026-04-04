@@ -1,0 +1,95 @@
+{
+  "title": "Walkthrough Extension Architecture",
+  "description": "Guides a new developer through the VS Code walkthrough extension's activation flow, playback engine, walkthrough discovery, staleness handling, and webview UI.",
+  "commitSha": "09ca55561097f56174f748c3405be79cf35075d2",
+  "steps": [
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        25,
+        86
+      ],
+      "symbol": "activate",
+      "contentHash": "07c143cbc6ed",
+      "subtitle": "This is the extension entry point: it initializes the engine, panel, recorder, status bar, file watcher, and hooks engine status updates to navigation and UI state.",
+      "duration": 8
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        99,
+        174
+      ],
+      "symbol": "activate",
+      "contentHash": "9956adc7cfc3",
+      "subtitle": "Here the panel message handling and VS Code command registration connect UI actions, playback controls, recording commands, repair, generation, and export features to extension behavior.",
+      "duration": 8
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [
+        18,
+        167
+      ],
+      "symbol": "PlaybackEngine",
+      "contentHash": "46f41aff3dce",
+      "subtitle": "The playback engine manages walkthrough state, including load, play, pause, next/prev navigation, auto-advance timing, and speed selection for step playback.",
+      "duration": 10
+    },
+    {
+      "file": "src/player/highlight.ts",
+      "lines": [
+        13,
+        51
+      ],
+      "symbol": "navigateToStep",
+      "contentHash": "4ae4871f8537",
+      "subtitle": "This helper opens the target file, reveals the step range in the editor, and applies line highlighting so walkthrough steps sync with code navigation.",
+      "duration": 6
+    },
+    {
+      "file": "src/walkthrough/loader.ts",
+      "lines": [
+        57,
+        101
+      ],
+      "symbol": "discoverWalkthroughs",
+      "contentHash": "77dba73383a9",
+      "subtitle": "Walkthrough discovery reads JSON files from .walkthrough, validates their schema, normalizes paths, and creates the in-memory WalkthroughFile objects used by the explorer and player.",
+      "duration": 8
+    },
+    {
+      "file": "src/walkthrough/staleness.ts",
+      "lines": [
+        18,
+        134
+      ],
+      "symbol": "checkStaleness",
+      "contentHash": "47cbf1857f6a",
+      "subtitle": "Staleness checking compares step hashes to current file content, uses Git line mappings when available, and falls back to symbol lookup to report drifted, missing, or git-resolved steps.",
+      "duration": 10
+    },
+    {
+      "file": "src/ui/panel.ts",
+      "lines": [
+        20,
+        72
+      ],
+      "symbol": "WalkthroughPanel",
+      "contentHash": "7380ba536fda",
+      "subtitle": "The panel manages the webview lifecycle, handles focus changes, receives UI commands from the webview, and updates the HTML content for playback or recording states.",
+      "duration": 8
+    },
+    {
+      "file": "src/ui/panel.ts",
+      "lines": [
+        156,
+        258
+      ],
+      "symbol": "buildPlaybackHtml",
+      "contentHash": "81aaa40a93fd",
+      "subtitle": "This section builds the playback UI HTML, including controls, step list, stale state indicators, related walkthrough links, and text-to-speech payload wiring.",
+      "duration": 10
+    }
+  ]
+}

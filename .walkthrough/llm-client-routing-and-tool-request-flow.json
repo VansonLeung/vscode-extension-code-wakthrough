@@ -1,0 +1,147 @@
+{
+  "title": "LLM Client Routing and Tool Request Flow",
+  "description": "Shows how AI client configuration is normalized, provider selection is routed, chat and tool-enabled requests are dispatched, and workspace-safe tool execution is implemented for OpenAI, Copilot, and Anthropic.",
+  "commitSha": "09ca55561097f56174f748c3405be79cf35075d2",
+  "related": [
+    {
+      "path": ".walkthrough/walkthrough-extension-architecture.json",
+      "title": "Walkthrough Extension Architecture",
+      "type": "related",
+      "note": "Provides broader activation and UI wiring context for the extension runtime that later triggers AI generation."
+    }
+  ],
+  "steps": [
+    {
+      "file": "src/ai/client-shared.ts",
+      "lines": [
+        36,
+        74
+      ],
+      "symbol": "getAIConfig",
+      "contentHash": "17dcd57cc946",
+      "subtitle": "Normalize AI settings from VS Code configuration into a shared AIConfig object and ensure API endpoints are valid before any provider-specific client is chosen.",
+      "explanation": "- Reads `codeWalkthrough.ai` settings and maps raw values into typed fields like `client`, `endpoint`, `model`, and `copilotModel`.\n- Uses `normalizeClientType` so unsupported values fall back to `openai` by default, keeping the rest of the code simple.\n- Builds provider-safe URLs with `buildApiUrl`, trimming slashes and avoiding malformed endpoint paths before any HTTP request is made.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/llm-client.ts",
+      "lines": [
+        18,
+        47
+      ],
+      "symbol": "chatCompletion",
+      "contentHash": "218f38f2a1c5",
+      "subtitle": "Central gateway that dispatches both regular and tool-enabled chat requests to the correct provider based on normalized configuration.",
+      "explanation": "- Exposes `chatCompletion` and `chatCompletionWithTools` as provider-agnostic APIs for the rest of the extension.\n- Chooses between `anthropic`, `copilot`, and OpenAI-compatible handlers by inspecting `config.client`.\n- Keeps provider-specific quirks behind this single routing layer so generation logic can stay consistent.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/openai-client.ts",
+      "lines": [
+        26,
+        55
+      ],
+      "symbol": "openAIChatCompletion",
+      "contentHash": "1c980c21dcce",
+      "subtitle": "Builds a standard OpenAI-compatible chat payload, logs safe diagnostics, and sends the request through the shared HTTP sender.",
+      "explanation": "- Constructs `/chat/completions` requests with a low temperature and a large `max_tokens` budget for walkthrough generation.\n- Logs endpoint, model, and masked API key details for debugging without exposing secrets.\n- Uses `buildApiUrl` from the shared module so the same normalized endpoint logic applies across providers.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/openai-client.ts",
+      "lines": [
+        57,
+        83
+      ],
+      "symbol": "openAIChatCompletionWithTools",
+      "contentHash": "28e56ffa72a5",
+      "subtitle": "Adds function-calling support to the OpenAI flow and normalizes the response into the extension’s common chat message shape.",
+      "explanation": "- Sends `tools` and `tool_choice: \"auto\"` so function-calling models can invoke workspace helpers automatically.\n- Reuses the same `/chat/completions` endpoint but passes structured `messages` and tool definitions.\n- Converts OpenAI’s API response into the shared `ChatMessage` contract so the rest of the extension can handle tool calls uniformly.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/anthropic-client.ts",
+      "lines": [
+        67,
+        83
+      ],
+      "symbol": "anthropicChatCompletion",
+      "contentHash": "a349672acbf3",
+      "subtitle": "Maps Anthropic’s `/messages` request and response semantics into the same chat completion contract used by other providers.",
+      "explanation": "- Builds Anthropic-specific request payloads while still exposing a simple string result to callers.\n- Normalizes the provider’s different `message` and `content` shapes so the upper layers treat Anthropic like a drop-in chat backend.\n- Ensures the extension does not need provider-specific branching beyond the llm-client router.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/copilot-client.ts",
+      "lines": [
+        12,
+        59
+      ],
+      "symbol": "chooseCopilotModel",
+      "contentHash": "533db8b65132",
+      "subtitle": "Selects a Copilot chat model from configured preferences, a single fallback, or an explicit user prompt, then optionally remembers that choice.",
+      "explanation": "- Queries VS Code’s language model API for available Copilot models and tries configured IDs first.\n- If only one model is available, it can persist that selection automatically to avoid repeated prompts.\n- Keeps model selection out of the main completion flow so downstream code can assume a valid `vscode.LanguageModelChat` instance.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/copilot-client.ts",
+      "lines": [
+        61,
+        76
+      ],
+      "symbol": "copilotChatCompletion",
+      "contentHash": "3f6c0244a63e",
+      "subtitle": "Wraps Copilot-specific conversation handling and exposes a plain string completion result to the extension.",
+      "explanation": "- Ensures a model is selected before making the Copilot-specific API call.\n- Logs provider usage clearly for diagnostics and throws a helpful error when no models are available.\n- Abstracts away Copilot’s vendor-specific API surface so the generation layer stays simple.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/tools/definitions.ts",
+      "lines": [
+        14,
+        63
+      ],
+      "symbol": "TOOL_DEFINITIONS",
+      "contentHash": "b57810c61bb1",
+      "subtitle": "Defines the workspace-facing tool interface for `list_files` and `read_file`, including argument schemas that the LLM uses to invoke safe file helpers.",
+      "explanation": "- Declares tool metadata in the function-calling format the model expects, including parameter names, types, and descriptions.\n- Makes filesystem operations discoverable to the LLM as structured `function` calls rather than free-form text.\n- Provides the contract needed for OpenAI and Anthropic tool-enabled requests to request workspace data safely.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/tools/executor.ts",
+      "lines": [
+        17,
+        80
+      ],
+      "symbol": "resolveSafePath",
+      "contentHash": "dd102545dbe9",
+      "subtitle": "Implements the security boundary for tool-enabled requests by resolving paths inside the workspace and restricting file operations.",
+      "explanation": "- Uses `path.resolve` and workspace root checks to prevent path traversal outside the repository.\n- Applies directory filtering and entry limits so `list_files` returns a stable, safe view of the workspace.\n- Caps `read_file` output and line ranges to prevent large or unintended file reads from model-driven tool calls.",
+      "duration": 8
+    },
+    {
+      "file": "src/ai/generate.ts",
+      "lines": [
+        43,
+        69
+      ],
+      "symbol": "generateWalkthrough",
+      "contentHash": "2833d8d6be79",
+      "subtitle": "Chooses between quick and deep generation strategies before any provider-specific API request is made, keeping strategy and routing separate.",
+      "explanation": "- Prompts the user for optional guidance and discovers existing walkthrough metadata before generating.\n- Selects the strategy from configuration or user choice, then delegates actual provider routing to `llm-client`.\n- Ensures the core AI entry point is responsible for strategy selection and context gathering, not provider-specific details.",
+      "duration": 8
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        25,
+        46
+      ],
+      "symbol": "activate",
+      "contentHash": "4c369cd3839d",
+      "subtitle": "Bootstraps the extension runtime, creates the UI and command wiring, and establishes the runtime state that later invokes AI generation and client routing.",
+      "explanation": "- Initializes the playback engine, panel, tree provider, recorder, and status bar used by the walkthrough UX.\n- Sets context keys and file watchers so `.walkthrough` files refresh automatically and commands know when the extension is active.\n- Connects the activation lifecycle to the AI generation path by preparing the runtime environment in which `generateWalkthrough` can be triggered.",
+      "duration": 8
+    }
+  ]
+}

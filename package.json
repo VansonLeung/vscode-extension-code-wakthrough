@@ -2,7 +2,7 @@
   "name": "code-walkthrough",
   "displayName": "Code Walkthrough",
   "description": "Interactive step-by-step code walkthroughs with auto-navigation, line highlighting, and subtitle explanations",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "code-walkthrough",
   "icon": "icon.png",
   "galleryBanner": {
@@ -227,7 +227,11 @@
         "codeWalkthrough.ai.client": {
           "type": "string",
           "default": "openai",
-          "enum": ["openai", "anthropic", "copilot"],
+          "enum": [
+            "openai",
+            "anthropic",
+            "copilot"
+          ],
           "enumDescriptions": [
             "Use the OpenAI-compatible chat completions API",
             "Use Anthropic's messages API",
@@ -258,12 +262,20 @@
         "codeWalkthrough.ai.strategy": {
           "type": "string",
           "default": "quick",
-          "enum": ["quick", "deep"],
+          "enum": [
+            "quick",
+            "deep"
+          ],
           "enumDescriptions": [
             "Quick Scan: Collects code context and sends it in one prompt (works with all providers)",
             "Deep Exploration: LLM explores the codebase interactively using tools using the configured provider"
           ],
           "description": "Default AI generation strategy"
+        },
+        "codeWalkthrough.tts.voiceUri": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred browser SpeechSynthesis voice URI. Leave blank to auto-pick a default English voice."
         }
       }
     },
@@ -271,22 +283,22 @@
       {
         "command": "codeWalkthrough.nextStep",
         "key": "right",
-        "when": "codeWalkthrough.active"
+        "when": "codeWalkthrough.active && codeWalkthrough.focused"
       },
       {
         "command": "codeWalkthrough.prevStep",
         "key": "left",
-        "when": "codeWalkthrough.active"
+        "when": "codeWalkthrough.active && codeWalkthrough.focused"
       },
       {
         "command": "codeWalkthrough.togglePlayback",
         "key": "space",
-        "when": "codeWalkthrough.active"
+        "when": "codeWalkthrough.active && codeWalkthrough.focused"
       },
       {
         "command": "codeWalkthrough.stop",
         "key": "escape",
-        "when": "codeWalkthrough.active"
+        "when": "codeWalkthrough.active && codeWalkthrough.focused"
       },
       {
         "command": "codeWalkthrough.recordStep",
@@ -296,7 +308,7 @@
       {
         "command": "codeWalkthrough.cycleSpeed",
         "key": "shift+space",
-        "when": "codeWalkthrough.active"
+        "when": "codeWalkthrough.active && codeWalkthrough.focused"
       }
     ]
   },

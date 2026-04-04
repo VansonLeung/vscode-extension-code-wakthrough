@@ -4,6 +4,7 @@ import { checkStaleness, StaleCheckResult } from "./walkthrough/staleness";
 import { PlaybackEngine, SpeedMultiplier, SPEED_OPTIONS } from "./player/engine";
 import { navigateToStep, clearAllHighlights } from "./player/highlight";
 import { WalkthroughPanel } from "./ui/panel";
+import { getTtsConfig, updateTtsVoice } from "./tts/config";
 import { WalkthroughTreeProvider } from "./ui/tree";
 import { Recorder } from "./recorder/recorder";
 import { StatusBarController } from "./ui/statusbar";
@@ -29,6 +30,10 @@ export function activate(context: vscode.ExtensionContext): void {
   recorder = new Recorder();
   statusBar = new StatusBarController();
 
+  void vscode.commands.executeCommand("setContext", "codeWalkthrough.active", false);
+  void vscode.commands.executeCommand("setContext", "codeWalkthrough.focused", false);
+  void vscode.commands.executeCommand("setContext", "codeWalkthrough.recording", false);
+
   const treeView = vscode.window.createTreeView("codeWalkthrough.explorer", {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
@@ -42,7 +47,7 @@ export function activate(context: vscode.ExtensionContext): void {
   walkthroughWatcher.onDidDelete(() => treeProvider.refresh());
 
   engine.onChange((status) => {
-    panel.update(status, currentStaleResults);
+    panel.update(status, currentStaleResults, getTtsConfig());
 
     const isActive = status.state !== "idle";
     vscode.commands.executeCommand("setContext", "codeWalkthrough.active", isActive);
@@ -88,42 +93,69 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  panel.onFocusChange((isFocused) => {
+    void vscode.commands.executeCommand("setContext", "codeWalkthrough.focused", isFocused);
+  });
+
   panel.onCommand((command) => {
-    if (command === "next") {
-      engine.next();
-    } else if (command === "prev") {
-      engine.prev();
-    } else if (command === "togglePlayback") {
-      engine.togglePlayback();
-    } else if (command === "stop") {
-      stopWalkthrough();
-    } else if (command.startsWith("goTo:")) {
-      const index = parseInt(command.split(":")[1], 10);
-      if (!isNaN(index)) {
-        engine.goTo(index);
-      }
-    } else if (command.startsWith("setSpeed:")) {
-      const speed = parseFloat(command.split(":")[1]);
-      if (SPEED_OPTIONS.includes(speed as SpeedMultiplier)) {
-        engine.setSpeed(speed as SpeedMultiplier);
-      }
-    } else if (command === "recordStep") {
-      recorder.captureStep();
-    } else if (command === "recordUndo") {
-      recorder.removeLastStep();
-    } else if (command === "recordStop") {
-      finishRecording();
-    } else if (command === "recordCancel") {
-      recorder.cancel();
-      panel.hide();
-      statusBar.hideAll();
-      vscode.commands.executeCommand("setContext", "codeWalkthrough.recording", false);
-    } else if (command === "repair") {
-      repairCurrentWalkthrough();
-    } else if (command.startsWith("openRelated:")) {
-      void openLinkedWalkthrough(command.slice("openRelated:".length));
+    switch (command.type) {
+      case "next":
+        engine.next();
+        return;
+      case "prev":
+        engine.prev();
+        return;
+      case "togglePlayback":
+        engine.togglePlayback();
+        return;
+      case "stop":
+        stopWalkthrough();
+        return;
+      case "goTo":
+        engine.goTo(command.index);
+        return;
+      case "setSpeed":
+        if (SPEED_OPTIONS.includes(command.speed as SpeedMultiplier)) {
+          engine.setSpeed(command.speed as SpeedMultiplier);
+        }
+        return;
+      case "recordStep":
+        recorder.captureStep();
+        return;
+      case "recordUndo":
+        recorder.removeLastStep();
+        return;
+      case "recordStop":
+        void finishRecording();
+        return;
+      case "recordCancel":
+        recorder.cancel();
+        panel.hide();
+        statusBar.hideAll();
+        void vscode.commands.executeCommand("setContext", "codeWalkthrough.recording", false);
+        return;
+      case "repair":
+        void repairCurrentWalkthrough();
+        return;
+      case "openRelated":
+        void openLinkedWalkthrough(command.path);
+        return;
+      case "ttsReady":
+        void syncPanelTtsState();
+        return;
+      case "ttsSetVoice":
+        void updateTtsVoice(command.voiceUri).then(syncPanelTtsState);
+        return;
     }
   });
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("codeWalkthrough.tts")) {
+        void syncPanelTtsState();
+      }
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codeWalkthrough.open", openWalkthrough),
@@ -638,9 +670,17 @@ function stopWalkthrough(): void {
   clearAllHighlights();
   panel.hide();
   statusBar.hideAll();
-  vscode.commands.executeCommand("setContext", "codeWalkthrough.active", false);
+  void vscode.commands.executeCommand("setContext", "codeWalkthrough.active", false);
+  void vscode.commands.executeCommand("setContext", "codeWalkthrough.focused", false);
 }
 
 export function deactivate(): void {
   clearAllHighlights();
+}
+
+async function syncPanelTtsState(): Promise<void> {
+  panel.postMessage({
+    type: "ttsState",
+    voiceUri: getTtsConfig().voiceUri,
+  });
 }

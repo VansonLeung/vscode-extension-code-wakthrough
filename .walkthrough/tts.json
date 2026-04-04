@@ -1,0 +1,123 @@
+{
+  "title": "播放與 TTS 流程導覽",
+  "description": "介紹從擴充功能啟動到播放引擎、面板命令、編輯器導覽、狀態列與 TTS 設定的執行流程。",
+  "commitSha": "09ca55561097f56174f748c3405be79cf35075d2",
+  "related": [
+    {
+      "path": ".walkthrough/walkthrough-extension-architecture.json",
+      "title": "Walkthrough Extension Architecture",
+      "type": "related",
+      "note": "閱讀此擴充功能整體架構能幫助理解播放與 TTS 流程的上下文。"
+    }
+  ],
+  "steps": [
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        26,
+        44
+      ],
+      "symbol": "activate",
+      "contentHash": "41376405030e",
+      "subtitle": "在 activate 中建立播放引擎、面板、樹狀檢視、錄製器與狀態列，並監聽 .walkthrough JSON 檔案變更。",
+      "explanation": "- `activate` 是擴充功能的入口，先建立 `PlaybackEngine`、`WalkthroughPanel`、`WalkthroughTreeProvider`、`Recorder`、`StatusBarController`。\n- 使用 `createTreeView` 連接 `WalkthroughTreeProvider`，並建立檔案系統監視器，讓 `.walkthrough/*.json` 的新增、修改、刪除會即時重整樹狀檢視。\n- 初始透過 `setContext` 設定 `codeWalkthrough.active`、`codeWalkthrough.focused`、`codeWalkthrough.recording`，為後續命令可見性與快捷鍵綁定建立上下文。",
+      "duration": 10
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        49,
+        68
+      ],
+      "symbol": "activate",
+      "contentHash": "7a322635c5b5",
+      "subtitle": "PlaybackEngine 狀態改變時，這段程式把播放狀態傳給面板並依照 stale 檢查結果導覽到正確步驟區間。",
+      "explanation": "- `engine.onChange` 監聽播放引擎狀態變更，第一時間呼叫 `panel.update(status, currentStaleResults, getTtsConfig())`。\n- 透過 `status.state !== \"idle\"` 決定 `codeWalkthrough.active`，讓 UI 與命令狀態能夠同步切換。\n- 如果當前步驟存在且步驟已經因 Git 變動而 `git-resolved` 或 `drifted`，會使用 `resolvedLines` 取代原本 `step.lines` 再呼叫 `navigateToStep`。\n- 這個流程是播放時將狀態、過時檢查結果與編輯器位置串接起來的關鍵橋接。",
+      "duration": 10
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        74,
+        84
+      ],
+      "symbol": "activate",
+      "contentHash": "a1b967957c15",
+      "subtitle": "當播放進入非啟動狀態時，這段負責切換狀態列顯示並清除高亮，避免殘留錯誤視覺效果。",
+      "explanation": "- `statusBar.showPlayback(...)` 只在 `isActive` 時呼叫，顯示目前播放或暫停狀態與步驟進度。\n- 否則 `statusBar.hideAll()` 隱藏播放與錄製列，同時呼叫 `clearAllHighlights()` 解除所有編輯器裝飾。\n- 這是一個播放狀態與視覺回饋之間的最後一哩，確保使用者不會看到過時的高亮或狀態列。",
+      "duration": 8
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [
+        29,
+        47
+      ],
+      "symbol": "PlaybackEngine",
+      "contentHash": "271f8eecb7f3",
+      "subtitle": "PlaybackEngine 的核心命令包括 load、play、pause、togglePlayback，這些方法管理播放狀態並觸發狀態更新事件。",
+      "explanation": "- `load(walkthrough)` 會先 `stop()`，重置 `currentIndex = 0`，並將狀態設為 `paused`。\n- `play()` 會檢查是否有可播放的 walkthrough，設定 `state = \"playing\"`，再呼叫 `scheduleAutoAdvance()` 進入自動前進。\n- `pause()` 會停用計時器並維持已暫停狀態，避免播放時持續前進。\n- `togglePlayback()` 把播放控制邏輯統一，讓前端面板與命令都能以同一個接口切換播放或暫停。",
+      "duration": 10
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [
+        60,
+        74
+      ],
+      "symbol": "PlaybackEngine",
+      "contentHash": "02d928140256",
+      "subtitle": "next / prev 方法負責在步驟間跳轉，並在持續播放時重新排程自動前進，維持播放連續性。",
+      "explanation": "- `next()` 檢查是否已到最後一步，若是則呼叫 `pause()` 並回傳 false，避免越界。\n- `prev()` 同樣避免在第一步往前跳轉。\n- 每次步驟跳轉後都會 `emit()` 狀態變更，讓 UI 重新渲染當前步驟資訊。\n- 若當前狀態仍為 `playing`，則重新呼叫 `scheduleAutoAdvance()` 以維持自動播放節奏。",
+      "duration": 8
+    },
+    {
+      "file": "src/ui/panel.ts",
+      "lines": [
+        39,
+        84
+      ],
+      "symbol": "WalkthroughPanel",
+      "contentHash": "0fe0c633ce80",
+      "subtitle": "WalkthroughPanel 建立可執行腳本的 Webview，並把前端播放、錄製、修復、TTS 等命令轉成內部事件。",
+      "explanation": "- `show()` 會重用已存在面板或建立新面板，並設定 `enableScripts` 與 `retainContextWhenHidden`。\n- 面板 dispose 時會清除 reference 並送出 `{ type: \"stop\" }`，確保後端播放狀態同步停止。\n- `onDidReceiveMessage` 解析前端傳來的 `command`，將 `next`、`prev`、`togglePlayback`、`stop`、`recordStep`、`recordUndo`、`recordStop`、`recordCancel`、`repair`、`ttsReady` 等命令發送到 `onCommand`。\n- 這使得 Webview 前端與擴充功能後端能以事件驅動方式雙向通訊。",
+      "duration": 10
+    },
+    {
+      "file": "src/player/highlight.ts",
+      "lines": [
+        13,
+        51
+      ],
+      "symbol": "navigateToStep",
+      "contentHash": "4ae4871f8537",
+      "subtitle": "navigateToStep 會打開步驟檔案、捲動至指定行範圍，並套用高亮裝飾來強調當前播放焦點。",
+      "explanation": "- 從 workspace root 解析 `step.file`，並以絕對路徑開啟文字文件。\n- 計算 0-base 的 `startLine` / `endLine`，使用 `showTextDocument(... preserveFocus: true)` 開啟檔案但維持焦點。\n- 建立 `Range`，呼叫 `editor.setDecorations(HIGHLIGHT_DECORATION, [{ range }])` 以顯示行高亮與概觀標尺。\n- 若打開檔案失敗，顯示警告而不是中斷播放流程，讓使用者知道步驟無法定位。",
+      "duration": 10
+    },
+    {
+      "file": "src/ui/statusbar.ts",
+      "lines": [
+        28,
+        57
+      ],
+      "symbol": "StatusBarController",
+      "contentHash": "365e349273d0",
+      "subtitle": "狀態列控制器根據播放或錄製模式切換顯示內容，提供即時播放進度與速度切換入口。",
+      "explanation": "- `showPlayback()` 依照 `state` 顯示不同 icon 與文字，並把進度設為 `(${stepIndex + 1}/${totalSteps})`。\n- 同時顯示 `speed`，讓使用者知道當前播放倍率。\n- `showRecording()` 顯示紅色錄製狀態列，並隱藏播放與速度項目，避免錄製模式與播放模式混淆。\n- `hideAll()` 在播放結束或切換上下文時隱藏所有狀態列，而 `dispose()` 釋放資源。",
+      "duration": 8
+    },
+    {
+      "file": "src/tts/config.ts",
+      "lines": [
+        7,
+        19
+      ],
+      "symbol": "getTtsConfig",
+      "contentHash": "3ba41398afa7",
+      "subtitle": "TTS 設定存取提供當前語音 URI，並支援將使用者選擇寫回全域設定。",
+      "explanation": "- `getTtsConfig()` 從 `codeWalkthrough.tts` 讀取 `voiceUri`，並移除末尾空白。\n- `updateTtsVoice()` 將新的 `voiceUri` 寫入全域設定，讓語音選項可在跨工作區或重啟後保留。\n- 這段與 `panel.update(..., getTtsConfig())` 一起，將後端 TTS 狀態傳遞給 Webview 前端，支援瀏覽器式 TTS 控制。",
+      "duration": 8
+    }
+  ]
+}

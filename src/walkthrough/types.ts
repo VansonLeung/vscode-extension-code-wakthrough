@@ -4,6 +4,7 @@ export interface WalkthroughStep {
   symbol?: string;
   contentHash?: string;
   subtitle: string;
+  explanation?: string;
   duration?: number;
 }
 

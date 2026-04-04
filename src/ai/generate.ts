@@ -496,6 +496,7 @@ async function parseAndSave(
         lines?: [number, number];
         symbol?: string;
         subtitle?: string;
+        explanation?: string;
         duration?: number;
       }>;
     };
@@ -547,6 +548,7 @@ async function parseAndSave(
         symbol: step.symbol,
         contentHash,
         subtitle: step.subtitle,
+        explanation: step.explanation,
         duration: step.duration ?? 8,
       });
     }
@@ -648,18 +650,20 @@ function buildPrompt(context: CodeContext, options?: PromptContextOptions): stri
     '      "file": "relative/path/to/file.ts",',
     '      "lines": [startLine, endLine],',
     '      "symbol": "nearestFunctionOrClassName",',
-    '      "subtitle": "2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",',
+    '      "subtitle": "Markdown-formatted text. 2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",',
+    '      "explanation": "Markdown-formatted text. Point-form List of explanations that deeply analyze interesting or non-obvious parts of the code. Include some code excerpts here to explain.",',
     '      "duration": 8',
     "    }",
     "  ]",
     "}",
     "",
     "REQUIREMENTS:",
-    "- 5-15 steps depending on codebase size",
+    "- 5-20 steps depending on codebase size",
     "- Start from entry points (main, index, app) and follow the execution flow",
     "- Each step should highlight 3-20 lines (focused, not entire files)",
     "- Line numbers must be 1-indexed and accurate for the file contents shown",
     "- Subtitles should explain WHAT the code does and WHY, not just restate the code",
+    "- Explanations should explain interesting or non-obvious parts of the code deeply rather than surface-level descriptions of trivial code (you may include some code excerpts to explain)",
     "- Use the actual symbol names from the code",
     "- Include \"related\" only when another walkthrough in the catalog is genuinely useful context",
     "- If you include \"related\", the \"path\" must exactly match a catalog entry",
@@ -748,7 +752,8 @@ function buildTransformPrompt(
     '      "file": "relative/path/to/file.ts",',
     '      "lines": [startLine, endLine],',
     '      "symbol": "nearestFunctionOrClassName",',
-    '      "subtitle": "2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",',
+    '      "subtitle": "Markdown-formatted text. 2-3 sentence explanation of what this code does and why it matters. Be specific about the actual code, not generic.",',
+    '      "explanation": "Markdown-formatted text. Point-form List of explanations that deeply analyze interesting or non-obvious parts of the code. Include some code excerpts here to explain.",',
     '      "duration": 8',
     "    }",
     "  ]",
@@ -760,6 +765,8 @@ function buildTransformPrompt(
     "- For extend, add genuinely missing steps or deeper detail instead of rephrasing the same content",
     "- For refactor, improve structure, sequencing, and clarity",
     "- For modify, make the requested targeted changes without unnecessary churn",
+    "- Subtitles should explain WHAT the code does and WHY, not just restate the code",
+    "- Explanations should explain interesting or non-obvious parts of the code deeply rather than surface-level descriptions of trivial code (you may include some code excerpts to explain)",
     "- Include \"related\" only when another walkthrough in the catalog is genuinely useful context",
     "- If you include \"related\", the \"path\" must exactly match a catalog entry",
     "- Return JSON only with no markdown fences"

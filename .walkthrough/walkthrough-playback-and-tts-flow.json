@@ -1,0 +1,158 @@
+{
+  "title": "Walkthrough Playback and TTS Flow",
+  "description": "A focused tour of how playback state is wired from engine to panel, editor navigation, status bar, and browser-based TTS during walkthrough playback.",
+  "commitSha": "09ca55561097f56174f748c3405be79cf35075d2",
+  "related": [
+    {
+      "path": ".walkthrough/demo.json",
+      "title": "Extension Architecture",
+      "type": "related",
+      "note": "Use this for a broader view of the extension after learning the playback/TTS path."
+    }
+  ],
+  "steps": [
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        25,
+        82
+      ],
+      "symbol": "activate",
+      "contentHash": "e407818ad21a",
+      "subtitle": "activate creates the playback engine, panel, tree provider, recorder, and status bar, then wires engine events into UI updates and navigation.\n\nIt sets initial context keys, refreshes walkthrough file changes, and subscribes to engine.onChange to update the webview, status bar, and editor highlight on every playback state change. This central activation path makes the engine the single source of truth for playback state.\n\nHow does the same engine status event keep the panel, editor navigation, and status bar aligned?",
+      "duration": 8
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [
+        29,
+        74
+      ],
+      "symbol": "PlaybackEngine",
+      "contentHash": "9800277d91b5",
+      "subtitle": "PlaybackEngine encapsulates the current walkthrough, currentIndex, playback state, and speed while exposing load/play/pause/next/prev methods.\n\nIt resets state on load, emits status updates after each command, and uses a shared timer slot for auto-advance. By centralizing currentStep and status emission, the panel and navigation logic can rely on one consistent engine snapshot.\n\nWhat mechanism makes the engine the authoritative source for both UI state and step timing?",
+      "duration": 8
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [
+        88,
+        106
+      ],
+      "symbol": "goTo",
+      "contentHash": "2ccb94eb539d",
+      "subtitle": "goTo and setSpeed move playback to a specific step or change playback speed while preserving synchronization with the panel.\n\nThey update currentIndex and speed, emit fresh status, and reschedule auto-advance if playback is active, so manual seeks and tempo changes don't break the step timing. This keeps the browser-side UI in sync with direct navigation commands.\n\nHow does this flow ensure a user jump still respects the current playback state?",
+      "duration": 8
+    },
+    {
+      "file": "src/player/engine.ts",
+      "lines": [
+        116,
+        128
+      ],
+      "symbol": "scheduleAutoAdvance",
+      "contentHash": "4e84d1dc6c53",
+      "subtitle": "scheduleAutoAdvance controls the timer that advances steps automatically using the current step duration and speed multiplier.\n\nIt clears any previous timeout, computes the next interval from either step-specific duration or a default, and scales that interval by speed. This is the key link between playback speed changes and faster or slower auto-advance.\n\nWhy does the engine recalculate the timer every time playback resumes or speed changes?",
+      "duration": 8
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        90,
+        145
+      ],
+      "symbol": "panel.onCommand",
+      "contentHash": "6a6c50521b14",
+      "subtitle": "panel.onCommand translates browser-side webview messages into extension actions like play/pause, step jumps, opening related walkthroughs, repair, export, and AI generation.\n\nIt parses commands from the webview and emits them in a form the extension can handle, bridging panel UI intent back into engine control and higher-level extension behavior. This mapping is what lets the browser UI trigger playback and walkthrough repair logic.\n\nWhich panel commands must travel from the webview back through the extension to affect playback state?",
+      "duration": 8
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        148,
+        260
+      ],
+      "symbol": "activate",
+      "contentHash": "63eabd63a462",
+      "subtitle": "activate also registers VS Code commands for playback control, file-specific playback start, export, and AI generation.\n\nThese command registrations expose the same engine controls from the tree view, command palette, and panel, so users can drive playback from multiple UI entry points. This is how the extension makes playback engine behavior available beyond just the webview.\n\nHow does command registration ensure the same engine instance serves both the panel and broader VS Code UI?",
+      "duration": 8
+    },
+    {
+      "file": "src/ui/statusbar.ts",
+      "lines": [
+        28,
+        45
+      ],
+      "symbol": "showPlayback",
+      "contentHash": "f90d2a19b7f3",
+      "subtitle": "showPlayback renders current playback state, step position, and speed into status bar text and icons.\n\nIt mirrors engine-driven playback in VS Code chrome as well as the webview, providing a persistent visual cue and direct play/pause and speed commands. This redundancy helps users keep track of playback even when the panel is hidden.\n\nWhy is it valuable to duplicate playback state in the status bar instead of only inside the panel?",
+      "duration": 8
+    },
+    {
+      "file": "src/extension.ts",
+      "lines": [
+        262,
+        309
+      ],
+      "symbol": "beginPlayback",
+      "contentHash": "7b2776f99c5b",
+      "subtitle": "beginPlayback loads a walkthrough, validates steps against the current git head, optionally repairs stale ranges, and only then starts engine.play.\n\nIt uses stale validation to detect drifted or missing mappings before playback begins, preventing the engine from navigating to incorrect file ranges. This pre-flight check keeps playback aligned with the live workspace.\n\nWhy does beginPlayback wait for stale validation and repair before handing control to the engine?",
+      "duration": 8
+    },
+    {
+      "file": "src/walkthrough/staleness.ts",
+      "lines": [
+        18,
+        126
+      ],
+      "symbol": "checkStaleness",
+      "contentHash": "82b1b03c9c6e",
+      "subtitle": "checkStaleness classifies each walkthrough step as fresh, drifted, missing, or git-resolved by comparing step hashes and optional git diff mappings.\n\nWhen a content hash no longer matches, it tries to remap line ranges using git diffs from the original commit, then records resolvedLines for navigation. This metadata determines whether playback should use remapped ranges or warn about stale content.\n\nHow does staleness metadata decide when navigation should use remapped lines instead of the recorded step range?",
+      "duration": 8
+    },
+    {
+      "file": "src/git/repair.ts",
+      "lines": [
+        21,
+        140
+      ],
+      "symbol": "repairWalkthrough",
+      "contentHash": "d7575e63b85f",
+      "subtitle": "repairWalkthrough attempts to remap stale steps using the walkthrough's original commit SHA, file rename detection, and git diff line mappings.\n\nIt opens files at the current HEAD, applies renames and range remapping, and rebuilds the walkthrough only when hashes and line mappings validate. This lets the extension recover drifted steps instead of leaving them unresolved.\n\nWhat conditions allow repair to remap a stale step rather than marking it unresolvable?",
+      "duration": 8
+    },
+    {
+      "file": "src/ui/panel.ts",
+      "lines": [
+        20,
+        57
+      ],
+      "symbol": "WalkthroughPanel.show",
+      "contentHash": "500e0f86b1a8",
+      "subtitle": "WalkthroughPanel.show creates or reveals the webview panel, wires focus and dispose events, and installs onDidReceiveMessage to route browser events back into extension commands.\n\nIt preserves context when hidden, tracks active focus, and converts webview messages into command strings that the extension can handle. This is the live two-way host that makes the panel interactive.\n\nHow does the panel create the live webview and ensure browser clicks are routed back into the extension?",
+      "duration": 8
+    },
+    {
+      "file": "src/ui/panel.ts",
+      "lines": [
+        81,
+        319
+      ],
+      "symbol": "buildPlaybackHtml",
+      "contentHash": "dc29bda1c563",
+      "subtitle": "buildPlaybackHtml turns playback status, stale metadata, related walkthrough links, and speech text into the webview payload the browser needs for TTS and controls.\n\nIt embeds the current step, stale detail, and control buttons so the panel can show the right UI state and let browser-side TTS stay aligned with step transitions. This is the bridge from engine status to browser-rendered speech-ready content.\n\nHow is the current step transformed into the payload the panel needs for voice playback and step navigation?",
+      "duration": 8
+    },
+    {
+      "file": "src/player/highlight.ts",
+      "lines": [
+        13,
+        44
+      ],
+      "symbol": "navigateToStep",
+      "contentHash": "e7fbb9d0be85",
+      "subtitle": "navigateToStep opens the target file, reveals the active line range, and decorates it in the editor while warning the user if the file cannot be opened.\n\nIt computes a safe range from the step lines, shows the document without stealing focus, and applies a highlight decoration so the user sees the current walkthrough location. Explicit missing-file handling prevents silent failure when a walkthrough step file is absent.\n\nWhy must walkthrough navigation explicitly handle missing files rather than assuming the target document is available?",
+      "duration": 8
+    }
+  ]
+}

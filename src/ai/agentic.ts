@@ -3,7 +3,7 @@ import { ChatMessage, chatCompletionWithTools, getAIConfig } from "./llm-client"
 import { TOOL_DEFINITIONS } from "./tools/definitions";
 import { executeTool } from "./tools/executor";
 
-const MAX_ITERATIONS = 15;
+const MAX_ITERATIONS = 20;
 const MAX_EMPTY_RESPONSES = 2;
 
 const SYSTEM_PROMPT = `You are a senior developer creating an interactive code walkthrough.
@@ -43,9 +43,9 @@ When you have enough understanding, output ONLY valid JSON (no markdown fences, 
 }
 
 REQUIREMENTS:
-- 5-15 steps depending on codebase complexity
+- 5-20 steps depending on codebase complexity
 - Start from entry points, follow execution flow
-- Each step highlights 3-20 lines (focused sections, not entire files)
+- Each step highlights 3-30 lines (focused sections, not entire files)
 - Line numbers must be accurate (use the line numbers shown by read_file)
 - Subtitles explain WHAT and WHY, not just restate the code
 - Include "related" only when there is a meaningful connection to another walkthrough provided in the catalog

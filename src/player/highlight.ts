@@ -3,11 +3,11 @@ import * as path from "path";
 import { WalkthroughStep } from "../walkthrough/types";
 
 const HIGHLIGHT_DECORATION = vscode.window.createTextEditorDecorationType({
-  backgroundColor: "rgba(255, 213, 79, 0.2)",
+  backgroundColor: "rgba(82, 217, 255, 0.2)",
   isWholeLine: true,
-  overviewRulerColor: "rgba(255, 213, 79, 0.8)",
+  overviewRulerColor: "rgba(82, 217, 255, 0.4)",
   overviewRulerLane: vscode.OverviewRulerLane.Center,
-  border: "1px solid rgba(255, 213, 79, 0.4)",
+  border: "1px solid rgba(49, 120, 201, 0.15)",
 });
 
 export async function navigateToStep(
@@ -29,7 +29,7 @@ export async function navigateToStep(
 
     const editor = await vscode.window.showTextDocument(doc, {
       viewColumn: vscode.ViewColumn.One,
-      preserveFocus: false,
+      preserveFocus: true,
     });
 
     const range = new vscode.Range(
