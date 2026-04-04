@@ -364,8 +364,7 @@ export class WalkthroughPanel {
   <div class="controls">
     <button class="ctrl-btn secondary" onclick="send('prev')">\u25C0\u25C0</button>
     <button class="ctrl-btn" onclick="send('togglePlayback')">${playIcon} ${playLabel}</button>
-    <button class="ctrl-btn secondary" onclick="send('next')">\u25B6\u25B6</button>
-    <select class="speed-select" onchange="send('setSpeed:' + this.value)">
+    <button class="ctrl-btn secondary" onclick="send('next')">\u25B6\u25B6</button>    <button id="tts-button" class="ctrl-btn secondary" onclick="toggleTts()">🔊 Read aloud</button>    <select class="speed-select" onchange="send('setSpeed:' + this.value)">
       ${speedOptions}
     </select>
     <div class="progress-bar">
@@ -389,9 +388,75 @@ export class WalkthroughPanel {
 
   <script>
     const vscode = acquireVsCodeApi();
+    const ttsButton = document.getElementById('tts-button');
+    const hasSpeech = typeof window.speechSynthesis !== 'undefined';
+    const utterance = hasSpeech ? new SpeechSynthesisUtterance() : null;
+
+    if (ttsButton && !hasSpeech) {
+      ttsButton.disabled = true;
+      ttsButton.title = 'Speech synthesis is unavailable in this environment.';
+    }
+
     function send(command) { vscode.postMessage({ command }); }
     function goTo(index) { vscode.postMessage({ command: 'goTo', index }); }
     function openRelated(path) { vscode.postMessage({ command: 'openRelated', path }); }
+
+    function buildSpeechText() {
+      const title = document.querySelector('.title')?.textContent?.trim() ?? '';
+      const fileLabel = document.querySelector('.file-label')?.textContent?.trim() ?? '';
+      const subtitle = document.querySelector('.subtitle-box')?.textContent?.trim() ?? '';
+      const phrases = [];
+      if (title) phrases.push(title);
+      if (fileLabel) phrases.push(fileLabel);
+      if (subtitle) phrases.push(subtitle);
+      return phrases.join('. ');
+    }
+
+    function toggleTts() {
+      if (!hasSpeech) {
+        return;
+      }
+      if (speechSynthesis.speaking) {
+        stopSpeech();
+      } else {
+        speakCurrentStep();
+      }
+    }
+
+    function speakCurrentStep() {
+      const text = buildSpeechText();
+      if (!text || !utterance) {
+        return;
+      }
+      stopSpeech();
+      utterance.text = text;
+      utterance.lang = navigator.language || 'en-US';
+      utterance.onend = () => updateTtsLabel(false);
+      utterance.onerror = () => updateTtsLabel(false);
+      speechSynthesis.speak(utterance);
+      updateTtsLabel(true);
+    }
+
+    function stopSpeech() {
+      if (!hasSpeech) {
+        return;
+      }
+      speechSynthesis.cancel();
+      updateTtsLabel(false);
+    }
+
+    function updateTtsLabel(isSpeaking) {
+      if (!ttsButton) {
+        return;
+      }
+      ttsButton.textContent = isSpeaking ? '■ Stop' : '🔊 Read aloud';
+    }
+
+    window.addEventListener('beforeunload', () => {
+      if (hasSpeech) {
+        speechSynthesis.cancel();
+      }
+    });
   </script>
 </body>
 </html>`;
